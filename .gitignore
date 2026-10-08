@@ -8,6 +8,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 
@@ -19,6 +20,7 @@ env/
 # Local environment files
 .env
 .env.*
+!.env.example
 
 # Runtime reviewer output
 review/

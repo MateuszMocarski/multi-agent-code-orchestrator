@@ -6,6 +6,7 @@ from config import (
     MAX_REVIEW_ROUNDS,
     REVIEWER_FIX_OUTPUT_PROMPT,
     REVIEWER_PROMPT,
+    validate_runtime_configuration,
 )
 from developer import run_developer
 from quality_gates import run_git_diff_check, run_pytest
@@ -13,6 +14,12 @@ from reviewer import read_verdict, run_reviewer
 
 
 def main() -> int:
+    try:
+        validate_runtime_configuration()
+    except RuntimeError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+
     developer_prompt = DEVELOPER_PROMPT.read_text(encoding="utf-8").strip()
     developer_exit_code = run_developer(developer_prompt)
     if developer_exit_code != 0:
