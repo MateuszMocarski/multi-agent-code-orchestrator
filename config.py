@@ -17,6 +17,7 @@ PROMPTS_DIR = PROJECT_DIR / "prompts"
 DEVELOPER_PROMPT = PROMPTS_DIR / "developer.txt"
 DEVELOPER_FIX_PROMPT = PROMPTS_DIR / "developer_fix.txt"
 REVIEWER_PROMPT = PROMPTS_DIR / "reviewer.txt"
+REVIEWER_FIX_OUTPUT_PROMPT = PROMPTS_DIR / "reviewer_fix_output.txt"
 MAX_REVIEW_ROUNDS = 4
 
 IMAGE = "opencode-local:2.0.22"

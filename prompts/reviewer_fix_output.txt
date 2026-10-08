@@ -1,0 +1,22 @@
+The previous review completed, but it failed the required output contract.
+
+Use the conclusions from the review you just performed. Do not modify anything in
+/workspace.
+
+Using shell/exec, create this file:
+
+/review/reviewer-feedback.md
+
+The first line must be exactly one of:
+
+VERDICT: APPROVED
+VERDICT: CHANGES_REQUESTED
+
+After writing the file, use shell/exec to verify it with exactly these commands:
+
+test -f /review/reviewer-feedback.md
+head -n 1 /review/reviewer-feedback.md
+cat /review/reviewer-feedback.md
+
+Do not use Write or Edit tools. Your task is not complete until the file exists and
+has been read back.

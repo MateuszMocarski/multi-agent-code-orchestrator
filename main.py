@@ -4,6 +4,7 @@ from config import (
     DEVELOPER_FIX_PROMPT,
     DEVELOPER_PROMPT,
     MAX_REVIEW_ROUNDS,
+    REVIEWER_FIX_OUTPUT_PROMPT,
     REVIEWER_PROMPT,
 )
 from developer import run_developer
@@ -19,6 +20,9 @@ def main() -> int:
         return 1
 
     reviewer_prompt = REVIEWER_PROMPT.read_text(encoding="utf-8").strip()
+    reviewer_fix_output_prompt = REVIEWER_FIX_OUTPUT_PROMPT.read_text(
+        encoding="utf-8"
+    ).strip()
     correction_prompt = DEVELOPER_FIX_PROMPT.read_text(encoding="utf-8").strip()
 
     for review_round in range(1, MAX_REVIEW_ROUNDS + 1):
@@ -39,7 +43,22 @@ def main() -> int:
             verdict = read_verdict()
         except RuntimeError as exc:
             print(f"Reviewer output contract failed: {exc}")
-            return 1
+            print("Retrying reviewer output recovery.")
+
+            reviewer_exit_code = run_reviewer(reviewer_fix_output_prompt)
+            if reviewer_exit_code != 0:
+                print("Reviewer output recovery run failed.")
+                return 1
+
+            try:
+                verdict = read_verdict()
+            except RuntimeError as retry_exc:
+                print(f"Reviewer output recovery failed: {retry_exc}")
+                print(
+                    "Reviewer output contract could not be recovered. "
+                    "Human intervention is required."
+                )
+                return 4
 
         print(f"=== REVIEW ROUND {review_round}: {verdict} ===")
         if verdict == "APPROVED":
