@@ -25,15 +25,20 @@ repository's test tooling, and two user-supplied OpenCode JSON configuration fil
 The configuration files may select different models/providers for development and
 review.
 
-Copy `.env.example` to a local `.env`, replace the placeholder paths, then export it
-in your shell. The orchestrator intentionally does not load `.env` itself.
+Create a local configuration file, then replace its placeholder values with paths and
+an image available on your machine:
 
 ```sh
-set -a
-. ./.env
-set +a
-python main.py
+cp .env.example .env
+# Edit .env with local values.
+./run.sh
 ```
+
+`run.sh` changes into this repository's directory, requires and loads the local
+`.env` file, then starts `python3 main.py`. The `.env` file is ignored by Git.
+
+As an alternative for a shell or CI environment that already manages variables, load
+the values yourself and run `python3 main.py` directly.
 
 Required environment variables:
 
@@ -47,6 +52,7 @@ Required environment variables:
 ## Files
 
 ```text
+run.sh                  local launcher that loads .env
 main.py                 orchestration flow
 config.py               environment-backed configuration
 developer.py            developer container invocation
@@ -56,6 +62,8 @@ prompts/                developer and reviewer instructions
 input/task.example.md   tracked task template
 input/task.md           local runtime task (ignored)
 review/                 local reviewer output (ignored)
+.env.example            tracked configuration template
+.env                    local configuration (ignored)
 ```
 
 Create `input/task.md` from `input/task.example.md` before running. It is mounted at
