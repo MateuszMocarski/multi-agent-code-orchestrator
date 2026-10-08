@@ -15,7 +15,9 @@ REVIEW_DIR = PROJECT_DIR / "review"
 REVIEW_FILE = REVIEW_DIR / "reviewer-feedback.md"
 PROMPTS_DIR = PROJECT_DIR / "prompts"
 DEVELOPER_PROMPT = PROMPTS_DIR / "developer.txt"
+DEVELOPER_FIX_PROMPT = PROMPTS_DIR / "developer_fix.txt"
 REVIEWER_PROMPT = PROMPTS_DIR / "reviewer.txt"
+MAX_REVIEW_ROUNDS = 3
 
 IMAGE = "opencode-local:2.0.22"
 DOCKER_COMMAND = ("sudo", "docker")
