@@ -1,7 +1,12 @@
-The previous review completed, but it failed the required output contract.
+The previous review completed, but it failed the required output contract. You are a
+fresh reviewer invocation and do not have the previous review session context.
 
-Use the conclusions from the review you just performed. Do not modify anything in
-/workspace.
+Read the original task from:
+
+/input/task.md
+
+Inspect the current repository state in /workspace using tools. Reconstruct and redo
+the review as necessary. Do not modify anything in /workspace.
 
 Using shell/exec, create this file:
 
