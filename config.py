@@ -20,7 +20,7 @@ REVIEWER_PROMPT = PROMPTS_DIR / "reviewer.txt"
 MAX_REVIEW_ROUNDS = 3
 
 IMAGE = "opencode-local:2.0.22"
-DOCKER_COMMAND = ("sudo", "docker")
+DOCKER_COMMAND = ("docker",)
 OPENCODE_COMMAND = ("opencode", "run", "--standalone", "--auto")
 CONTAINER_ENVIRONMENT = (
     "OPENCODE_CONFIG=/config/opencode.json",
