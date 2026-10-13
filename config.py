@@ -13,11 +13,14 @@ def environment_path(name: str) -> Path | None:
 REPO = environment_path("ORCHESTRATOR_TARGET_REPO")
 DEVELOPER_CONFIG = environment_path("ORCHESTRATOR_DEVELOPER_CONFIG")
 REVIEWER_CONFIG = environment_path("ORCHESTRATOR_REVIEWER_CONFIG")
+RUNTIME_DIR = environment_path("ORCHESTRATOR_RUNTIME_DIR")
 
-INPUT_DIR = PROJECT_DIR / "input"
-TASK_FILE = INPUT_DIR / "task.md"
-REVIEW_DIR = PROJECT_DIR / "review"
-REVIEW_FILE = REVIEW_DIR / "reviewer-feedback.md"
+INPUT_DIR = RUNTIME_DIR / "input" if RUNTIME_DIR else None
+TASK_FILE = INPUT_DIR / "task.md" if INPUT_DIR else None
+REVIEW_DIR = RUNTIME_DIR / "review" if RUNTIME_DIR else None
+REVIEW_FILE = REVIEW_DIR / "reviewer-feedback.md" if REVIEW_DIR else None
+OUTPUT_DIR = RUNTIME_DIR / "output" if RUNTIME_DIR else None
+LOGS_DIR = RUNTIME_DIR / "logs" if RUNTIME_DIR else None
 PROMPTS_DIR = PROJECT_DIR / "prompts"
 DEVELOPER_PROMPT = PROMPTS_DIR / "developer.txt"
 DEVELOPER_FIX_PROMPT = PROMPTS_DIR / "developer_fix.txt"
@@ -40,6 +43,7 @@ def validate_runtime_configuration() -> None:
         "ORCHESTRATOR_TARGET_REPO": REPO,
         "ORCHESTRATOR_DEVELOPER_CONFIG": DEVELOPER_CONFIG,
         "ORCHESTRATOR_REVIEWER_CONFIG": REVIEWER_CONFIG,
+        "ORCHESTRATOR_RUNTIME_DIR": RUNTIME_DIR,
     }
     missing = [name for name, path in required_paths.items() if path is None]
     if not IMAGE:
@@ -55,8 +59,20 @@ def validate_runtime_configuration() -> None:
     if invalid:
         raise RuntimeError(f"Configured paths do not exist: {', '.join(invalid)}")
 
+    if RUNTIME_DIR is not None and not RUNTIME_DIR.is_absolute():
+        raise RuntimeError("ORCHESTRATOR_RUNTIME_DIR must be an absolute path.")
+    if RUNTIME_DIR is not None:
+        try:
+            RUNTIME_DIR.resolve().relative_to(PROJECT_DIR.resolve())
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError(
+                "ORCHESTRATOR_RUNTIME_DIR must be outside the orchestrator source directory."
+            )
+
     if MAX_REVIEW_ROUNDS < 1:
         raise RuntimeError("ORCHESTRATOR_MAX_REVIEW_ROUNDS must be at least 1.")
 
-    if not TASK_FILE.exists():
+    if TASK_FILE is None or not TASK_FILE.exists():
         raise RuntimeError(f"Task file does not exist: {TASK_FILE}")

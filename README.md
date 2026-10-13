@@ -7,7 +7,7 @@ bounded correction loop.
 
 ## Workflow
 
-1. The developer implements the task from `input/task.md`.
+1. The developer implements the task from the external runtime task file.
 2. Docker-based deterministic quality gates run `pytest` and `git diff --check`.
 3. The reviewer independently reviews the read-only workspace and writes a verdict.
 4. `CHANGES_REQUESTED` starts a developer correction round using the review artifact.
@@ -43,6 +43,7 @@ the values yourself and run `python3 main.py` directly.
 Required environment variables:
 
 - `ORCHESTRATOR_TARGET_REPO`: absolute path to the repository to modify and review.
+- `ORCHESTRATOR_RUNTIME_DIR`: absolute path for per-run input, review, output, and logs.
 - `ORCHESTRATOR_DEVELOPER_CONFIG`: absolute path to the developer OpenCode config.
 - `ORCHESTRATOR_REVIEWER_CONFIG`: absolute path to the reviewer OpenCode config.
 - `ORCHESTRATOR_DOCKER_IMAGE`: image containing OpenCode and required test tooling.
@@ -60,14 +61,26 @@ quality_gates.py        Docker pytest and diff checks
 reviewer.py             reviewer invocation and strict verdict parsing
 prompts/                developer and reviewer instructions
 input/task.example.md   tracked task template
-input/task.md           local runtime task (ignored)
-review/                 local reviewer output (ignored)
 .env.example            tracked configuration template
 .env                    local configuration (ignored)
 ```
 
-Create `input/task.md` from `input/task.example.md` before running. It is mounted at
-`/input/task.md` in the agent containers.
+Set `ORCHESTRATOR_RUNTIME_DIR` to an absolute host path outside this source checkout.
+The launcher creates this directory structure:
+
+```text
+<runtime>/
+  input/task.md
+  review/reviewer-feedback.md
+  output/
+  logs/
+```
+
+Create `<runtime>/input/task.md` from the tracked `input/task.example.md` before
+running. The task is mounted read-only at `/input/task.md` in both agent containers.
+The reviewer directory is mounted read-write for reviewer output and read-only for
+developer correction rounds. `output/` and `logs/` reserve external locations for
+runtime artifacts; the current workflow does not write files there.
 
 ## Review contract and limits
 

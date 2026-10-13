@@ -22,12 +22,12 @@ env/
 .env.*
 !.env.example
 
-# Runtime reviewer output
+# Legacy local runtime paths
 review/
+input/task.md
 
 # Editor and operating-system files
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-input/task.md
