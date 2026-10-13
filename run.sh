@@ -13,6 +13,19 @@ set -a
 . ./.env
 set +a
 
+if [[ "${1:-}" == "--check" ]]; then
+  if [[ "$#" -ne 1 ]]; then
+    echo "Usage: ./run.sh [--check]"
+    exit 2
+  fi
+  exec python3 main.py --check
+fi
+
+if [[ "$#" -ne 0 ]]; then
+  echo "Usage: ./run.sh [--check]"
+  exit 2
+fi
+
 if [[ "$ORCHESTRATOR_RUNTIME_DIR" != /* ]]; then
   echo "ORCHESTRATOR_RUNTIME_DIR must be an absolute path."
   exit 1

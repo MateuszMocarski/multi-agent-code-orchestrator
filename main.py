@@ -6,6 +6,7 @@ from config import (
     MAX_REVIEW_ROUNDS,
     REVIEWER_FIX_OUTPUT_PROMPT,
     REVIEWER_PROMPT,
+    run_preflight,
     validate_runtime_configuration,
 )
 from developer import run_developer
@@ -14,6 +15,12 @@ from reviewer import read_verdict, run_reviewer
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--check"]:
+        return run_preflight()
+    if sys.argv[1:]:
+        print("Usage: python3 main.py [--check]")
+        return 2
+
     try:
         validate_runtime_configuration()
     except RuntimeError as exc:

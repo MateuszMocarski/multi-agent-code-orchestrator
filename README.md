@@ -36,6 +36,9 @@ cp .env.example .env
 
 `run.sh` changes into this repository's directory, requires and loads the local
 `.env` file, then starts `python3 main.py`. The `.env` file is ignored by Git.
+Run `./run.sh --check` to validate the configuration and task without creating
+runtime directories or starting containers. The task must differ from the tracked
+`input/task.example.md` template. This check does not write to the target repository.
 
 As an alternative for a shell or CI environment that already manages variables, load
 the values yourself and run `python3 main.py` directly.

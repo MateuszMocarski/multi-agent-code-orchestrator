@@ -59,6 +59,22 @@ def validate_runtime_configuration() -> None:
     if invalid:
         raise RuntimeError(f"Configured paths do not exist: {', '.join(invalid)}")
 
+    for name, path in (
+        ("ORCHESTRATOR_TARGET_REPO", REPO),
+        ("ORCHESTRATOR_DEVELOPER_CONFIG", DEVELOPER_CONFIG),
+        ("ORCHESTRATOR_REVIEWER_CONFIG", REVIEWER_CONFIG),
+    ):
+        if path is not None and not path.is_absolute():
+            raise RuntimeError(f"{name} must be an absolute path.")
+    if REPO is not None and not REPO.is_dir():
+        raise RuntimeError("ORCHESTRATOR_TARGET_REPO must be a directory.")
+    for name, path in (
+        ("ORCHESTRATOR_DEVELOPER_CONFIG", DEVELOPER_CONFIG),
+        ("ORCHESTRATOR_REVIEWER_CONFIG", REVIEWER_CONFIG),
+    ):
+        if path is not None and not path.is_file():
+            raise RuntimeError(f"{name} must be a file.")
+
     if RUNTIME_DIR is not None and not RUNTIME_DIR.is_absolute():
         raise RuntimeError("ORCHESTRATOR_RUNTIME_DIR must be an absolute path.")
     if RUNTIME_DIR is not None:
@@ -76,3 +92,27 @@ def validate_runtime_configuration() -> None:
 
     if TASK_FILE is None or not TASK_FILE.exists():
         raise RuntimeError(f"Task file does not exist: {TASK_FILE}")
+    if not TASK_FILE.is_file():
+        raise RuntimeError(f"Task path is not a file: {TASK_FILE}")
+
+    template_file = PROJECT_DIR / "input" / "task.example.md"
+    if TASK_FILE.read_bytes() == template_file.read_bytes():
+        raise RuntimeError(
+            "Task file is unchanged from input/task.example.md; edit it before running."
+        )
+
+
+def run_preflight() -> int:
+    try:
+        validate_runtime_configuration()
+    except (RuntimeError, OSError) as exc:
+        print(f"Preflight failed: {exc}")
+        return 1
+
+    print("Configuration: OK")
+    print("Target repository: OK")
+    print("Runtime directory: OK")
+    print("Task: OK")
+    print(f"Docker image: {IMAGE}")
+    print("Preflight complete.")
+    return 0
