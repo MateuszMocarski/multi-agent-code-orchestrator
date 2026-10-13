@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+ARG AGENT_BACKEND=codex
+
+FROM node:24-bookworm-slim AS agent-cli
+ARG AGENT_BACKEND
+
+RUN set -eu; \
+    case "$AGENT_BACKEND" in \
+      codex) npm install --global --no-audit --no-fund @openai/codex@0.156.1 ;; \
+      opencode) npm install --global --no-audit --no-fund opencode-ai@2.0.22 ;; \
+      *) echo "Unsupported AGENT_BACKEND: $AGENT_BACKEND" >&2; exit 2 ;; \
+    esac
+
+FROM python:3.14-slim-bookworm
+ARG AGENT_BACKEND
+ARG AGENT_UID
+ARG AGENT_GID
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends bash ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=agent-cli /usr/local/ /usr/local/
+
+RUN python -m venv /opt/agent-venv \
+    && /opt/agent-venv/bin/python -m pip install --no-cache-dir pytest==8.4.2
+
+RUN --mount=type=secret,id=target-requirements,target=/tmp/target-requirements.txt,required=false \
+    if [ -s /tmp/target-requirements.txt ]; then \
+      /opt/agent-venv/bin/python -m pip install --no-cache-dir \
+        -r /tmp/target-requirements.txt; \
+    fi
+
+RUN test "$AGENT_UID" -gt 0 \
+    && test "$AGENT_GID" -gt 0 \
+    && groupadd --gid "$AGENT_GID" agent \
+    && useradd --uid "$AGENT_UID" --gid "$AGENT_GID" \
+      --create-home --shell /bin/bash agent \
+    && mkdir -p /workspace /input /review /codex-state \
+    && chown agent:agent /workspace /input /review /codex-state
+
+ENV PATH="/opt/agent-venv/bin:/usr/local/bin:${PATH}"
+WORKDIR /workspace
+USER ${AGENT_UID}:${AGENT_GID}

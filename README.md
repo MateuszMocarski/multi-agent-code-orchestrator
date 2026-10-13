@@ -4,7 +4,8 @@ This project runs a deterministic developer, quality-gate, and reviewer loop aga
 a target Git repository. The Python orchestrator owns role permissions, task and
 prompt selection, quality gates, verdict parsing, and the bounded correction loop.
 `agent_runtime.py` owns runtime-specific commands, environment, configuration/state
-mounts, networking, and backend validation.
+mounts, networking, and backend validation. `docker/Dockerfile.agent` and
+`image.sh` own the shared agent image definition and its build and smoke-check steps.
 
 ## Workflow
 
@@ -21,8 +22,20 @@ quality gates and the correction loop remain in Python.
 ## Backend selection
 
 `ORCHESTRATOR_AGENT_BACKEND` accepts `opencode` or `codex`. If unset, it defaults to
-`opencode` for existing installations. Both backends use the configured common
-Docker image, which must contain the selected CLI and target repository test tools.
+`opencode` for existing installations. A single image is built for the selected
+backend and reused for developer, reviewer, and deterministic quality-gate
+containers. `docker/Dockerfile.agent` installs only that selected agent CLI.
+
+### Image baseline and target dependencies
+
+The image provides Debian Bookworm userspace, bash, git, Python 3.14, and pytest
+8.4.2. This is the initial target baseline: Python/pytest projects. It does not
+include arbitrary target-project dependencies by default. To include them, set
+`ORCHESTRATOR_PYTHON_REQUIREMENTS` to an absolute path to a pinned requirements
+file before building. The build passes it to BuildKit as a temporary build secret,
+so its contents are not copied into the build context or image layers. Agent and
+quality-gate invocations do not install packages. Projects using another dependency
+format or requiring system libraries need a deliberate image extension.
 
 The tracked `.env.example` documents common and backend-specific settings. Copy it
 to `.env` for local development, or use an external environment file:
@@ -44,12 +57,42 @@ outside the orchestrator source checkout, for example at
 starting Python.
 
 Preflight validates common paths and task, then only the selected backend's
-configuration. It does not start containers, authenticate, or modify the target:
+configuration. It does not inspect or build the image, start containers,
+authenticate, or modify the target:
 
 ```sh
 ./run.sh --check
 ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh --check
 ```
+
+Image setup is a separate operation. With Docker installed, `image.sh build`
+builds `ORCHESTRATOR_DOCKER_IMAGE` from the repository-owned Dockerfile. If that
+setting is absent, the predictable default tag is
+`orchestrator-agent:<backend>-py314-v1` (for example,
+`orchestrator-agent:codex-py314-v1`). The selected backend comes from the same
+environment file as `run.sh`. Set `ORCHESTRATOR_DOCKER_IMAGE` to the matching tag
+when changing backends. The Docker base tags track Python 3.14 and Node 24 patch
+security updates; agent CLI versions and pytest are pinned in the Dockerfile.
+The image build passes the local host UID/GID as build arguments and creates a
+matching non-root `agent` account, so host-owned writable mounts work without
+changing their ownership or mode.
+
+```sh
+./image.sh build
+./image.sh check "$ORCHESTRATOR_DOCKER_IMAGE"
+./image.sh mount-check "$ORCHESTRATOR_DOCKER_IMAGE"
+```
+
+`check` verifies common tools and the selected CLI. Codex validation runs the
+actual non-inference parser with the workflow's global `--ask-for-approval` flag
+before `exec`, and checks reviewer `--add-dir` and model options. OpenCode
+validation uses only `--version` and `--help`. `mount-check` uses temporary host
+directories, left owned by the host user, to verify developer write access,
+reviewer read-only target and writable feedback, read-only input access,
+quality-gate read-only target, and (for Codex) writable state. It also checks the
+container UID/GID against the host UID/GID.
+These commands do not authenticate or run an agent task. They are separate from
+`run.sh --check`, which remains a host configuration preflight.
 
 The task must exist at `<runtime>/input/task.md` and differ from the tracked
 `input/task.example.md` template.
@@ -121,8 +164,11 @@ limit without approval also requires human intervention.
 - Agent containers have no fixed names, so separate orchestrator runs do not collide
   on singleton container names.
 
-Codex CLI/image compatibility and actual agent execution require Docker and a
-repository-owned image, which this milestone does not add. Preflight validates host
-configuration only. Authentication is not tested, and no Codex inference is run by
-the automated tests. OpenCode requires its two config files even though Codex does
-not. The project does not yet provide bootstrap automation or role-specific images.
+Codex CLI 0.156.1 matches the verified host CLI version. OpenCode uses the pinned
+`opencode-ai` package release 2.0.22; OpenCode is not installed on the host here,
+so that package pin could not be compared against a local executable. The base
+image tags intentionally receive upstream security patch updates. Authentication
+is not tested, and the automated tests do not run Codex inference. OpenCode still
+requires its two host config files even though Codex does not. The image build and
+validation lifecycle is now repository-owned;
+bootstrap automation that creates workspaces and configuration remains future work.
