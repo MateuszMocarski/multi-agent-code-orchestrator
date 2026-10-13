@@ -25,8 +25,8 @@ repository's test tooling, and two user-supplied OpenCode JSON configuration fil
 The configuration files may select different models/providers for development and
 review.
 
-Create a local configuration file, then replace its placeholder values with paths and
-an image available on your machine:
+The configuration template `.env.example` remains tracked. For local development,
+you can create `.env` in this checkout and replace its placeholder values:
 
 ```sh
 cp .env.example .env
@@ -34,8 +34,20 @@ cp .env.example .env
 ./run.sh
 ```
 
-`run.sh` changes into this repository's directory, requires and loads the local
-`.env` file, then starts `python3 main.py`. The `.env` file is ignored by Git.
+`run.sh` loads the file named by `ORCHESTRATOR_ENV_FILE` when set, then starts
+`python3 main.py`:
+
+```sh
+ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
+ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh --check
+```
+
+If `ORCHESTRATOR_ENV_FILE` is unset, `run.sh` falls back to `.env` in the
+orchestrator checkout. It reports an error if the selected file is missing. Future
+bootstrap-generated configuration should live outside the orchestrator source
+checkout, for example at `<workspace>/config/orchestrator.env`. The local `.env`
+file is ignored by Git.
+
 Run `./run.sh --check` to validate the configuration and task without creating
 runtime directories or starting containers. The task must differ from the tracked
 `input/task.example.md` template. This check does not write to the target repository.
@@ -56,7 +68,7 @@ Required environment variables:
 ## Files
 
 ```text
-run.sh                  local launcher that loads .env
+run.sh                  local launcher that loads an external env file or .env
 main.py                 orchestration flow
 config.py               environment-backed configuration
 developer.py            developer container invocation

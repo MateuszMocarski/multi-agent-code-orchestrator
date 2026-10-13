@@ -1,0 +1,80 @@
+diff --git a/README.md b/README.md
+index 056164a..7dad22d 100644
+--- a/README.md
++++ b/README.md
+@@ -25,8 +25,8 @@ repository's test tooling, and two user-supplied OpenCode JSON configuration fil
+ The configuration files may select different models/providers for development and
+ review.
+ 
+-Create a local configuration file, then replace its placeholder values with paths and
+-an image available on your machine:
++The configuration template `.env.example` remains tracked. For local development,
++you can create `.env` in this checkout and replace its placeholder values:
+ 
+ ```sh
+ cp .env.example .env
+@@ -34,8 +34,20 @@ cp .env.example .env
+ ./run.sh
+ ```
+ 
+-`run.sh` changes into this repository's directory, requires and loads the local
+-`.env` file, then starts `python3 main.py`. The `.env` file is ignored by Git.
++`run.sh` loads the file named by `ORCHESTRATOR_ENV_FILE` when set, then starts
++`python3 main.py`:
++
++```sh
++ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
++ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh --check
++```
++
++If `ORCHESTRATOR_ENV_FILE` is unset, `run.sh` falls back to `.env` in the
++orchestrator checkout. It reports an error if the selected file is missing. Future
++bootstrap-generated configuration should live outside the orchestrator source
++checkout, for example at `<workspace>/config/orchestrator.env`. The local `.env`
++file is ignored by Git.
++
+ Run `./run.sh --check` to validate the configuration and task without creating
+ runtime directories or starting containers. The task must differ from the tracked
+ `input/task.example.md` template. This check does not write to the target repository.
+@@ -56,7 +68,7 @@ Required environment variables:
+ ## Files
+ 
+ ```text
+-run.sh                  local launcher that loads .env
++run.sh                  local launcher that loads an external env file or .env
+ main.py                 orchestration flow
+ config.py               environment-backed configuration
+ developer.py            developer container invocation
+diff --git a/run.sh b/run.sh
+index 6dd6c82..75c72cd 100755
+--- a/run.sh
++++ b/run.sh
+@@ -3,14 +3,24 @@ set -euo pipefail
+ 
+ cd "$(dirname "$0")"
+ 
+-if [[ ! -f .env ]]; then
+-  echo "Missing .env file."
+-  echo "Copy .env.example to .env and fill in your local values."
++if [[ -n "${ORCHESTRATOR_ENV_FILE:-}" ]]; then
++  env_file="$ORCHESTRATOR_ENV_FILE"
++else
++  env_file="$PWD/.env"
++fi
++
++if [[ ! -f "$env_file" ]]; then
++  if [[ -n "${ORCHESTRATOR_ENV_FILE:-}" ]]; then
++    echo "Environment file not found: $env_file"
++  else
++    echo "Environment file not found: $env_file"
++    echo "Set ORCHESTRATOR_ENV_FILE or copy .env.example to .env and fill in your local values."
++  fi
+   exit 1
+ fi
+ 
+ set -a
+-. ./.env
++. "$env_file"
+ set +a
+ 
+ if [[ "${1:-}" == "--check" ]]; then
