@@ -1,7 +1,7 @@
 from config import (
-    CONTAINER_ENVIRONMENT,
     DOCKER_COMMAND,
     IMAGE,
+    QUALITY_GATE_ENVIRONMENT,
     REPO,
 )
 from docker_runner import run_container
@@ -12,11 +12,9 @@ def run_quality_gate(name: str, container_command: list[str]) -> int:
         *DOCKER_COMMAND,
         "run",
         "--rm",
-        "--network",
-        "host",
     ]
 
-    for environment in CONTAINER_ENVIRONMENT:
+    for environment in QUALITY_GATE_ENVIRONMENT:
         command.extend(("-e", environment))
 
     command.extend(

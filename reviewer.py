@@ -1,14 +1,5 @@
-from config import (
-    CONTAINER_ENVIRONMENT,
-    DOCKER_COMMAND,
-    IMAGE,
-    INPUT_DIR,
-    OPENCODE_COMMAND,
-    REPO,
-    REVIEW_DIR,
-    REVIEW_FILE,
-    REVIEWER_CONFIG,
-)
+from config import REVIEW_DIR, REVIEW_FILE
+from container_command import build_agent_command
 from docker_runner import run_container
 
 
@@ -17,35 +8,7 @@ def run_reviewer(prompt: str) -> int:
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
     REVIEW_FILE.unlink(missing_ok=True)
 
-    command = [
-        *DOCKER_COMMAND,
-        "run",
-        "--rm",
-        "--name",
-        "orchestrator-reviewer",
-        "--network",
-        "host",
-    ]
-
-    for environment in CONTAINER_ENVIRONMENT:
-        command.extend(("-e", environment))
-
-    command.extend(
-        (
-            "--mount",
-            f"type=bind,src={REPO},dst=/workspace,readonly",
-            "--mount",
-            f"type=bind,src={INPUT_DIR},dst=/input,readonly",
-            "--mount",
-            f"type=bind,src={REVIEW_DIR},dst=/review",
-            "--mount",
-            f"type=bind,src={REVIEWER_CONFIG},dst=/config/opencode.json,readonly",
-            IMAGE,
-            *OPENCODE_COMMAND,
-            prompt,
-        )
-    )
-
+    command = build_agent_command("reviewer", prompt)
     return run_container("REVIEWER", command)
 
 

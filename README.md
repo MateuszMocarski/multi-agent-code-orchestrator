@@ -1,121 +1,128 @@
 # Docker agent orchestrator
 
-This is a small procedural orchestrator for an implementation-and-review workflow.
-It runs separate developer and reviewer OpenCode containers against a target Git
-repository, stores the reviewer verdict in a host-mounted artifact, and enforces a
-bounded correction loop.
+This project runs a deterministic developer, quality-gate, and reviewer loop against
+a target Git repository. The Python orchestrator owns role permissions, task and
+prompt selection, quality gates, verdict parsing, and the bounded correction loop.
+`agent_runtime.py` owns runtime-specific commands, environment, configuration/state
+mounts, networking, and backend validation.
 
 ## Workflow
 
-1. The developer implements the task from the external runtime task file.
-2. Docker-based deterministic quality gates run `pytest` and `git diff --check`.
-3. The reviewer independently reviews the read-only workspace and writes a verdict.
-4. `CHANGES_REQUESTED` starts a developer correction round using the review artifact.
-5. The cycle ends on approval or when the configured review-round limit is reached.
+1. A developer agent receives the task and a read-write target repository.
+2. Docker quality gates run `pytest` and `git diff --check` with a read-only target.
+3. A reviewer receives a read-only target repository and writes its feedback artifact.
+4. `CHANGES_REQUESTED` starts a developer correction round with read-only review feedback.
+5. The loop ends on `APPROVED` or requires human intervention at the configured limit.
 
-The developer, quality gates, and reviewer are Docker containers. OpenCode is the
-agent runtime invoked inside developer and reviewer containers. Model and provider
-selection are not configured by this project: they are supplied by your separate
-OpenCode configuration files.
+The outer orchestrator makes every decision. Each developer or reviewer invocation
+is one non-interactive backend process inside a Docker container; deterministic
+quality gates and the correction loop remain in Python.
 
-## Setup and configuration
+## Backend selection
 
-Requirements are Docker, Python 3, an image containing OpenCode plus the target
-repository's test tooling, and two user-supplied OpenCode JSON configuration files.
-The configuration files may select different models/providers for development and
-review.
+`ORCHESTRATOR_AGENT_BACKEND` accepts `opencode` or `codex`. If unset, it defaults to
+`opencode` for existing installations. Both backends use the configured common
+Docker image, which must contain the selected CLI and target repository test tools.
 
-The configuration template `.env.example` remains tracked. For local development,
-you can create `.env` in this checkout and replace its placeholder values:
+The tracked `.env.example` documents common and backend-specific settings. Copy it
+to `.env` for local development, or use an external environment file:
 
 ```sh
 cp .env.example .env
 # Edit .env with local values.
+./run.sh --check
 ./run.sh
+
+ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh --check
+ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
 ```
 
-`run.sh` loads the file named by `ORCHESTRATOR_ENV_FILE` when set, then starts
-`python3 main.py`:
+`ORCHESTRATOR_ENV_FILE`, when set, selects the environment file. Otherwise `run.sh`
+loads `.env` in this checkout. Future bootstrap-generated configuration should live
+outside the orchestrator source checkout, for example at
+`<workspace>/config/orchestrator.env`. The launcher loads the selected file before
+starting Python.
+
+Preflight validates common paths and task, then only the selected backend's
+configuration. It does not start containers, authenticate, or modify the target:
 
 ```sh
-ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
+./run.sh --check
 ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh --check
 ```
 
-If `ORCHESTRATOR_ENV_FILE` is unset, `run.sh` falls back to `.env` in the
-orchestrator checkout. It reports an error if the selected file is missing. Future
-bootstrap-generated configuration should live outside the orchestrator source
-checkout, for example at `<workspace>/config/orchestrator.env`. The local `.env`
-file is ignored by Git.
+The task must exist at `<runtime>/input/task.md` and differ from the tracked
+`input/task.example.md` template.
 
-Run `./run.sh --check` to validate the configuration and task without creating
-runtime directories or starting containers. The task must differ from the tracked
-`input/task.example.md` template. This check does not write to the target repository.
+## OpenCode setup
 
-As an alternative for a shell or CI environment that already manages variables, load
-the values yourself and run `python3 main.py` directly.
+OpenCode remains the default backend. Configure separate JSON files for developer
+and reviewer roles:
 
-Required environment variables:
+- `ORCHESTRATOR_DEVELOPER_CONFIG`
+- `ORCHESTRATOR_REVIEWER_CONFIG`
 
-- `ORCHESTRATOR_TARGET_REPO`: absolute path to the repository to modify and review.
-- `ORCHESTRATOR_RUNTIME_DIR`: absolute path for per-run input, review, output, and logs.
-- `ORCHESTRATOR_DEVELOPER_CONFIG`: absolute path to the developer OpenCode config.
-- `ORCHESTRATOR_REVIEWER_CONFIG`: absolute path to the reviewer OpenCode config.
-- `ORCHESTRATOR_DOCKER_IMAGE`: image containing OpenCode and required test tooling.
+Each file is mounted read-only at `/config/opencode.json` in its respective agent
+container and selected with `OPENCODE_CONFIG`. Model/provider selection remains in
+those user-supplied files. OpenCode containers use host networking to preserve
+setups that connect to host-local model services.
 
-`ORCHESTRATOR_MAX_REVIEW_ROUNDS` is optional and defaults to `4`.
+## Codex setup
 
-## Files
+Set `ORCHESTRATOR_AGENT_BACKEND=codex` and configure
+`ORCHESTRATOR_CODEX_STATE_DIR` to an existing absolute host directory containing
+the Codex state used for authentication and configuration. The directory must be
+outside both the orchestrator checkout and target repository. The installed CLI
+uses `CODEX_HOME` to locate its config and authentication state; containers set it
+to `/codex-state` and bind-mount the configured host directory there. The mount is
+read-write so the CLI can maintain its state. The directory is mounted only in
+developer and reviewer containers when Codex is selected. Keep it private and do
+not place it in the source repository or image.
 
-```text
-run.sh                  local launcher that loads an external env file or .env
-main.py                 orchestration flow
-config.py               environment-backed configuration
-developer.py            developer container invocation
-quality_gates.py        Docker pytest and diff checks
-reviewer.py             reviewer invocation and strict verdict parsing
-prompts/                developer and reviewer instructions
-input/task.example.md   tracked task template
-.env.example            tracked configuration template
-.env                    local configuration (ignored)
-```
+`ORCHESTRATOR_DEVELOPER_MODEL` and `ORCHESTRATOR_REVIEWER_MODEL` are optional.
+When set, each is passed to Codex's documented `--model` option for that role;
+otherwise Codex uses its configured default. Codex runs through `codex exec` with
+`--sandbox workspace-write` and `--ask-for-approval never`. Docker mount permissions
+remain the outer boundary: the developer's target mount is read-write, the reviewer's
+target mount is read-only, and reviewer feedback is writable at `/review` using the
+CLI's `--add-dir /review` option. Codex containers use normal Docker networking.
 
-Set `ORCHESTRATOR_RUNTIME_DIR` to an absolute host path outside this source checkout.
-The launcher creates this directory structure:
+Preflight checks that the Codex state directory exists and is outside protected
+repositories. It does not authenticate or probe the image. The configured image
+must include a compatible Codex CLI; this cannot currently be verified by preflight.
 
-```text
-<runtime>/
-  input/task.md
-  review/reviewer-feedback.md
-  output/
-  logs/
-```
+## Common configuration
 
-Create `<runtime>/input/task.md` from the tracked `input/task.example.md` before
-running. The task is mounted read-only at `/input/task.md` in both agent containers.
-The reviewer directory is mounted read-write for reviewer output and read-only for
-developer correction rounds. `output/` and `logs/` reserve external locations for
-runtime artifacts; the current workflow does not write files there.
+The host needs Docker and Python 3. The selected agent CLI and the target
+repository's test tools must be available in `ORCHESTRATOR_DOCKER_IMAGE`.
 
-## Review contract and limits
+- `ORCHESTRATOR_TARGET_REPO`: absolute target repository directory.
+- `ORCHESTRATOR_RUNTIME_DIR`: absolute runtime directory outside this source checkout.
+- `ORCHESTRATOR_DOCKER_IMAGE`: image containing the selected agent CLI and test tooling.
+- `ORCHESTRATOR_AGENT_BACKEND`: `opencode` or `codex`; defaults to `opencode`.
+- `ORCHESTRATOR_MAX_REVIEW_ROUNDS`: optional positive integer, defaults to `4`.
 
-The reviewer must write `/review/reviewer-feedback.md`. Its first line must be
-exactly one of:
+The runtime directory contains `input/task.md`, reviewer feedback, and reserved
+output/log directories. The launcher creates these directories for normal workflow
+startup; preflight does not create them.
 
-```text
-VERDICT: APPROVED
-VERDICT: CHANGES_REQUESTED
-```
+The reviewer writes `/review/reviewer-feedback.md`. Its first line must be exactly
+`VERDICT: APPROVED` or `VERDICT: CHANGES_REQUESTED`. If the output contract is
+invalid after a reviewer run, the orchestrator retries once with a recovery prompt;
+a second failure requires human intervention. Reaching the configured review-round
+limit without approval also requires human intervention.
 
-If a zero-exit reviewer run produces an invalid artifact, the orchestrator retries
-the reviewer once with a recovery prompt. A failed recovery requires human
-intervention. Repeated `CHANGES_REQUESTED` results also require human intervention
-when the maximum review-round limit is reached.
+## Permission boundaries and limitations
 
-## Security model
+- Developer: target read-write, task read-only, and correction feedback read-only.
+- Reviewer: target and task read-only, reviewer output read-write.
+- Quality gates: target read-only; no agent runtime state or backend configuration.
+- No container receives the Docker socket, the host home directory, or unrelated repositories.
+- Agent containers have no fixed names, so separate orchestrator runs do not collide
+  on singleton container names.
 
-The developer receives `/workspace` read-write. During correction rounds it receives
-`/review` read-only. The reviewer receives `/workspace` read-only and `/review`
-read-write for its feedback artifact. Input and OpenCode config mounts are read-only.
-The agent containers are not given the Docker socket. Treat the target repository,
-the Docker image, and user-supplied OpenCode configurations as trusted local inputs.
+Codex CLI/image compatibility and actual agent execution require Docker and a
+repository-owned image, which this milestone does not add. Preflight validates host
+configuration only. Authentication is not tested, and no Codex inference is run by
+the automated tests. OpenCode requires its two config files even though Codex does
+not. The project does not yet provide bootstrap automation or role-specific images.
