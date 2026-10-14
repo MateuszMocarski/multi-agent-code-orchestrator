@@ -48,7 +48,31 @@ def _require_path(name: str, path: Path | None, *, kind: str) -> None:
         raise RuntimeError(f"{name} must be a file.")
 
 
-def validate_runtime_configuration() -> None:
+def validate_task_configuration() -> None:
+    _require_path("ORCHESTRATOR_RUNTIME_DIR/input/task.md", TASK_FILE, kind="file")
+    template_file = PROJECT_DIR / "input" / "task.example.md"
+    if TASK_FILE is not None and TASK_FILE.read_bytes() == template_file.read_bytes():
+        raise RuntimeError(
+            "Task file is unchanged from input/task.example.md; edit it before running."
+        )
+
+
+def task_readiness() -> tuple[str, str]:
+    if TASK_FILE is None or not TASK_FILE.is_absolute():
+        return "invalid", "task path is not configured as an absolute path"
+    if not TASK_FILE.exists():
+        return "missing", "not created yet"
+    if not TASK_FILE.is_file():
+        return "invalid", "task path is not a file"
+    try:
+        if TASK_FILE.read_bytes() == (PROJECT_DIR / "input" / "task.example.md").read_bytes():
+            return "template", "template not edited yet"
+    except OSError as exc:
+        return "invalid", f"cannot read task: {exc}"
+    return "ready", "valid task is present"
+
+
+def validate_runtime_configuration(*, require_task: bool = True) -> None:
     if BACKEND not in {"opencode", "codex"}:
         raise RuntimeError(
             "ORCHESTRATOR_AGENT_BACKEND must be one of: opencode, codex."
@@ -70,12 +94,8 @@ def validate_runtime_configuration() -> None:
     if MAX_REVIEW_ROUNDS < 1:
         raise RuntimeError("ORCHESTRATOR_MAX_REVIEW_ROUNDS must be at least 1.")
 
-    _require_path("ORCHESTRATOR_RUNTIME_DIR/input/task.md", TASK_FILE, kind="file")
-    template_file = PROJECT_DIR / "input" / "task.example.md"
-    if TASK_FILE is not None and TASK_FILE.read_bytes() == template_file.read_bytes():
-        raise RuntimeError(
-            "Task file is unchanged from input/task.example.md; edit it before running."
-        )
+    if require_task:
+        validate_task_configuration()
 
     if BACKEND == "opencode":
         from .agent_runtime import validate_opencode_configuration

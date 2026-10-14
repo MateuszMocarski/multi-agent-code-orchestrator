@@ -211,7 +211,8 @@ def shell_value(value: str | Path) -> str:
 
 
 def config_text(layout: Layout, backend: str, selected_image: str, codex_state: Path | None,
-                dev_config: Path | None, rev_config: Path | None, requirements: Path | None) -> str:
+                dev_config: Path | None, rev_config: Path | None, requirements: Path | None,
+                developer_model: str | None = None, reviewer_model: str | None = None) -> str:
     values = {
         "ORCHESTRATOR_TARGET_REPO": layout.target_repo,
         "ORCHESTRATOR_RUNTIME_DIR": layout.runtime,
@@ -221,6 +222,10 @@ def config_text(layout: Layout, backend: str, selected_image: str, codex_state: 
     }
     if backend == "codex":
         values["ORCHESTRATOR_CODEX_STATE_DIR"] = codex_state
+        if developer_model is not None:
+            values["ORCHESTRATOR_DEVELOPER_MODEL"] = developer_model
+        if reviewer_model is not None:
+            values["ORCHESTRATOR_REVIEWER_MODEL"] = reviewer_model
     else:
         values["ORCHESTRATOR_DEVELOPER_CONFIG"] = dev_config
         values["ORCHESTRATOR_REVIEWER_CONFIG"] = rev_config
@@ -309,6 +314,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image")
     parser.add_argument("--python-requirements", help="Absolute path or path relative to cloned target repository")
     parser.add_argument("--codex-state", help="Existing external Codex state directory")
+    parser.add_argument("--developer-model", help="Optional Codex model ID for the developer role")
+    parser.add_argument("--reviewer-model", help="Optional Codex model ID for the reviewer role")
     parser.add_argument("--developer-config", help="Existing OpenCode developer config file")
     parser.add_argument("--reviewer-config", help="Existing OpenCode reviewer config file")
     parser.add_argument("--force-config", action="store_true", help="Replace a different generated environment file")
@@ -333,6 +340,8 @@ def bootstrap(args) -> None:
     ref = args.orchestrator_ref
     backend = args.backend
     selected_image = args.image or image.default_image_name(backend)
+    if backend == "opencode" and (args.developer_model or args.reviewer_model):
+        raise ValueError("--developer-model and --reviewer-model apply only to --backend codex")
     state = external_path(args.codex_state, "--codex-state") if args.codex_state else None
     dev = rev = None
     if backend == "codex" and state is not None and not state.is_dir():
@@ -412,7 +421,8 @@ def bootstrap(args) -> None:
     if backend == "codex" and args.codex_state is not None:
         validate_codex_state(state, layout)
 
-    content = config_text(layout, backend, selected_image, state, dev, rev, requirements)
+    content = config_text(layout, backend, selected_image, state, dev, rev, requirements,
+                          args.developer_model, args.reviewer_model)
 
     def write_workspace_config():
         if layout.config_dir.is_symlink() or layout.runtime.is_symlink():

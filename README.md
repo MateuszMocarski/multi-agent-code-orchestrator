@@ -33,8 +33,8 @@ containers. `docker/Dockerfile.agent` installs only that selected agent CLI.
 
 ### Image baseline and target dependencies
 
-The image provides Debian Bookworm userspace, bash, git, Python 3.14, and pytest
-8.4.2. This is the initial target baseline: Python/pytest projects. It does not
+The image provides Debian Bookworm userspace, bash, git, Python 3.14, and the
+pytest version pinned in `toolchain.json`. This is the initial target baseline: Python/pytest projects. It does not
 include arbitrary target-project dependencies by default. To include them, set
 `ORCHESTRATOR_PYTHON_REQUIREMENTS` to an absolute path to a pinned requirements
 file before building. The build passes it to BuildKit as a temporary build secret,
@@ -76,8 +76,13 @@ setting is absent, the predictable default tag is
 `orchestrator-agent:<backend>-py314-v1` (for example,
 `orchestrator-agent:codex-py314-v1`). The selected backend comes from the same
 environment file as `run.sh`. Set `ORCHESTRATOR_DOCKER_IMAGE` to the matching tag
-when changing backends. The Docker base tags track Python 3.14 and Node 24 patch
-security updates; agent CLI versions and pytest are pinned in the Dockerfile.
+when changing backends. The Docker base tags and exact CLI/pytest pins are
+centralized in `toolchain.json`; normal builds always use those pins.
+`./agent toolchain check` queries registries for newer stable releases, and
+`./agent toolchain update [codex|opencode|pytest|all]` is the explicit update
+path. It writes exact stable versions, runs unit checks, then builds and smoke
+checks both backend images; validation failures leave the updated lock visible
+for review.
 The image build passes the local host UID/GID as build arguments and creates a
 matching non-root `agent` account, so host-owned writable mounts work without
 changing their ownership or mode.
@@ -102,9 +107,41 @@ These commands do not authenticate or run an agent task. They are separate from
 The task must exist at `<runtime>/input/task.md` and differ from the tracked
 `input/task.example.md` template.
 
+## Top-level agent CLI
+
+`./agent` is the convenient interface; `bootstrap.sh`, `run.sh`, and `image.sh`
+remain supported compatibility launchers. Codex is the recommended backend;
+OpenCode remains supported as a local/experimental backend.
+
+```sh
+./agent --help
+./agent bootstrap --workspace /absolute/path/agent-workspace \
+  --target-repo /path/to/target.git --backend codex \
+  --developer-model developer-model-id --reviewer-model reviewer-model-id
+cd /absolute/path/agent-workspace/orchestrator
+./agent auth status
+./agent auth login
+./agent doctor
+# Edit /absolute/path/agent-workspace/projects/<target>/runtime/input/task.md
+./agent check   # safe preflight; never starts an agent
+./agent run     # starts developer/reviewer agents and uses inference
+```
+
+Per-role Codex model IDs are opaque and optional. Omit either option to use the
+Codex CLI/account default. The Codex auth lifecycle stores state only in the
+configured workspace state directory; it does not copy `~/.codex`. Treat this
+persistent state as sensitive. `auth status` is non-destructive; login/logout
+run inside the repository-owned image. OpenCode reports Codex auth as not
+applicable. Bootstrap, `check`, `doctor`, image checks, and toolchain inspection
+do not run inference. Bootstrap does not authenticate.
+
+When `ORCHESTRATOR_ENV_FILE` is unset, `agent` discovers the sibling workspace
+config only when the checkout has the bootstrap workspace layout. An explicit
+environment file always takes precedence.
+
 ## Reproducible workspace bootstrap
 
-`bootstrap.sh` prepares a separate workspace from a Git target source. It requires
+`./agent bootstrap` prepares a separate workspace from a Git target source. It requires
 Linux/WSL, Python 3.10 or newer, Git, and Docker with daemon access as the current
 non-root user. Bootstrap does not install host software or create a host virtual
 environment; the orchestrator host code uses only the Python standard library.
@@ -232,11 +269,7 @@ limit without approval also requires human intervention.
 - Agent containers have no fixed names, so separate orchestrator runs do not collide
   on singleton container names.
 
-Codex CLI 0.156.1 matches the verified host CLI version. OpenCode uses the pinned
-`opencode-ai` package release 2.0.22; OpenCode is not installed on the host here,
-so that package pin could not be compared against a local executable. The base
-image tags intentionally receive upstream security patch updates. Authentication
-is not tested, and the automated tests do not run Codex inference. OpenCode still
-requires its two host config files even though Codex does not. The image build and
-validation lifecycle is now repository-owned;
-bootstrap automation that creates workspaces and configuration remains future work.
+The canonical OpenCode npm package used by this project is `opencode-ai`.
+OpenCode still requires its two host config files even though Codex does not.
+The image, bootstrap, and local CLI lifecycle are repository-owned. Automated
+tests use temporary Codex state and do not log in or run inference.

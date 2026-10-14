@@ -1,20 +1,38 @@
 # syntax=docker/dockerfile:1.7
 ARG AGENT_BACKEND=codex
+ARG NODE_BASE
+ARG PYTHON_BASE
 
-FROM node:24-bookworm-slim AS agent-cli
+FROM ${NODE_BASE} AS agent-cli
 ARG AGENT_BACKEND
+ARG CODEX_PACKAGE
+ARG CODEX_VERSION
+ARG OPENCODE_PACKAGE
+ARG OPENCODE_VERSION
 
 RUN set -eu; \
     case "$AGENT_BACKEND" in \
-      codex) npm install --global --no-audit --no-fund @openai/codex@0.156.1 ;; \
-      opencode) npm install --global --no-audit --no-fund opencode-ai@2.0.22 ;; \
+      codex) npm install --global --no-audit --no-fund "${CODEX_PACKAGE}@${CODEX_VERSION}" ;; \
+      opencode) npm install --global --no-audit --no-fund "${OPENCODE_PACKAGE}@${OPENCODE_VERSION}" ;; \
       *) echo "Unsupported AGENT_BACKEND: $AGENT_BACKEND" >&2; exit 2 ;; \
     esac
 
-FROM python:3.14-slim-bookworm
+FROM ${PYTHON_BASE}
 ARG AGENT_BACKEND
 ARG AGENT_UID
 ARG AGENT_GID
+ARG PYTEST_VERSION
+ARG PYTHON_VERSION
+ARG AGENT_BACKEND_VERSION
+ARG AGENT_BACKEND_PACKAGE
+ARG TOOLCHAIN_ID
+
+LABEL org.opencontainers.image.title="multi-agent-code-orchestrator-agent" \
+      org.opencontainers.image.backend="${AGENT_BACKEND}" \
+      org.opencontainers.image.backend-package="${AGENT_BACKEND_PACKAGE}" \
+      org.opencontainers.image.backend-version="${AGENT_BACKEND_VERSION}" \
+      org.opencontainers.image.python-version="${PYTHON_VERSION}" \
+      org.opencontainers.image.toolchain-id="${TOOLCHAIN_ID}"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bash ca-certificates git \
@@ -23,7 +41,7 @@ RUN apt-get update \
 COPY --from=agent-cli /usr/local/ /usr/local/
 
 RUN python -m venv /opt/agent-venv \
-    && /opt/agent-venv/bin/python -m pip install --no-cache-dir pytest==8.4.2
+    && /opt/agent-venv/bin/python -m pip install --no-cache-dir "pytest==${PYTEST_VERSION}"
 
 RUN --mount=type=secret,id=target-requirements,target=/tmp/target-requirements.txt,required=false \
     if [ -s /tmp/target-requirements.txt ]; then \

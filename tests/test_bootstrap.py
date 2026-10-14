@@ -80,6 +80,17 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotIn("CODEX_STATE", opencode)
         self.assertEqual(bootstrap.shell_value("/a path/it's"), "'/a path/it'\"'\"'s'")
 
+    def test_codex_model_options_are_optional_exact_and_shell_quoted(self):
+        default = bootstrap.config_text(self.layout, "codex", "tag", self.state, None, None, None)
+        self.assertNotIn("ORCHESTRATOR_DEVELOPER_MODEL", default)
+        self.assertNotIn("ORCHESTRATOR_REVIEWER_MODEL", default)
+        configured = bootstrap.config_text(
+            self.layout, "codex", "tag", self.state, None, None, None,
+            "model with spaces", "opaque's-id",
+        )
+        self.assertIn("ORCHESTRATOR_DEVELOPER_MODEL='model with spaces'", configured)
+        self.assertIn("ORCHESTRATOR_REVIEWER_MODEL='opaque'\"'\"'s-id'", configured)
+
     def test_default_image_comes_from_existing_image_module(self):
         self.assertEqual(bootstrap.image.default_image_name("codex"), "orchestrator-agent:codex-py314-v1")
 
@@ -124,6 +135,29 @@ class BootstrapTests(unittest.TestCase):
         bootstrap.ensure_private_directory(state)
         self.assertEqual(state.parent.stat().st_mode & 0o777, 0o700)
         self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+
+    def test_external_codex_state_permissions_are_preserved(self):
+        source, _, _ = self.make_git_repo("external-state-target")
+        external = self.root / "external-codex-state"
+        external.mkdir(mode=0o750)
+        external.chmod(0o750)
+        workspace = self.root / "external-state-workspace"
+        args = bootstrap.make_parser().parse_args([
+            "--workspace", str(workspace), "--target-repo", str(source),
+            "--backend", "codex", "--codex-state", str(external), "--skip-image-build",
+        ])
+        original_run = bootstrap.run
+
+        def run_with_mocked_images(command, **kwargs):
+            if len(command) >= 2 and Path(command[0]).name == "image.sh":
+                return ""
+            return original_run(command, **kwargs)
+
+        with mock.patch.object(bootstrap, "check_prerequisites"), mock.patch.object(
+            bootstrap, "run", side_effect=run_with_mocked_images
+        ):
+            bootstrap.bootstrap(args)
+        self.assertEqual(external.stat().st_mode & 0o777, 0o750)
 
     def test_existing_repository_identity_accepts_normalized_local_source(self):
         source, _, _ = self.make_git_repo("identity-source")
