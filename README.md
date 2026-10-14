@@ -97,6 +97,55 @@ These commands do not authenticate or run an agent task. They are separate from
 The task must exist at `<runtime>/input/task.md` and differ from the tracked
 `input/task.example.md` template.
 
+## Reproducible workspace bootstrap
+
+`bootstrap.sh` prepares a separate workspace from a Git target source. It requires
+Linux/WSL, Python 3.10 or newer, Git, and Docker with daemon access as the current
+non-root user. Bootstrap does not install host software or create a host virtual
+environment; the orchestrator host code uses only the Python standard library.
+
+```sh
+./bootstrap.sh --workspace /absolute/path/agent-workspace \
+  --target-repo /path/to/target.git --backend codex
+```
+
+For OpenCode, pass existing role configuration files with `--developer-config`
+and `--reviewer-config`. Optional `--target-ref`, `--target-name`, `--image`,
+`--python-requirements`, `--codex-state`, and `--force-config` customize the
+workspace. Requirements paths may be absolute or relative to the cloned target.
+Bootstrap clones the current orchestrator commit by default and clones the target
+only when its destination is absent. Existing repositories are verified and left
+alone; generated configuration is preserved when equivalent and otherwise needs
+`--force-config` to replace.
+
+The workspace keeps source, runtime files, configuration, and Codex state apart:
+
+```text
+<workspace>/orchestrator/
+<workspace>/projects/<target>/repo/
+<workspace>/projects/<target>/runtime/{input,review,output,logs}/
+<workspace>/config/orchestrator.env
+<workspace>/state/codex/                 # Codex default only
+```
+
+Bootstrap writes an external, private `orchestrator.env`, builds the repository
+image, runs its non-inference `check` and mount checks, and performs `run.sh
+--check` against a temporary bootstrap-only task. `--skip-image-build` skips
+only the build and still checks the selected image. Codex authentication is not
+copied or tested; the configured state directory may still need authentication
+before real agent use.
+Without `--python-requirements`, the image contains the baseline Python 3.14 and
+pytest setup only. Other dependency formats or system libraries require a
+deliberate image extension.
+
+After bootstrap, create/edit `<workspace>/projects/<target>/runtime/input/task.md`
+and run this safe preflight from the cloned orchestrator:
+
+```sh
+cd /absolute/path/agent-workspace/orchestrator
+ORCHESTRATOR_ENV_FILE=/absolute/path/agent-workspace/config/orchestrator.env ./run.sh --check
+```
+
 ## OpenCode setup
 
 OpenCode remains the default backend. Configure separate JSON files for developer
