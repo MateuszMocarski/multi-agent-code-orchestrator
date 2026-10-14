@@ -121,7 +121,7 @@ def _probe_auth_status() -> tuple[str, int]:
         return "unknown", 1
     try:
         commands = _codex_auth_help(config.IMAGE)
-    except RuntimeError as exc:
+    except (RuntimeError, OSError):
         return "unknown", 1
     command = auth_docker_command(config.IMAGE, Path(state), commands[1])
     try:
@@ -204,61 +204,82 @@ def doctor() -> int:
         docker_ok = False
     rows.append(("Docker daemon", "PASS" if docker_ok else "FAIL",
                  "available" if docker_ok else "not reachable"))
+    workspace_config_ok = False
     try:
         config.validate_runtime_configuration(require_task=False)
+        workspace_config_ok = True
         rows.append(("Workspace config", "PASS", "paths and backend config valid"))
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, TypeError, ValueError) as exc:
         rows.append(("Workspace config", "FAIL", str(exc)))
-    task_state, task_detail = config.task_readiness()
+    try:
+        task_state, task_detail = config.task_readiness()
+    except (OSError, TypeError, ValueError) as exc:
+        task_state, task_detail = "invalid", f"cannot inspect task path: {exc}"
     task_status = "PASS" if task_state == "ready" else "WARN" if task_state in {"missing", "template"} else "FAIL"
     rows.append(("Task", task_status, task_detail))
     backend = config.BACKEND
-    rows.append(("Backend", "PASS" if backend in ("codex", "opencode") else "FAIL", backend))
-    if backend == "codex":
+    valid_backend = backend in {"codex", "opencode"}
+    rows.append(("Backend", "PASS" if valid_backend else "FAIL", str(backend)))
+    if valid_backend and workspace_config_ok and backend == "codex":
         model_dev = os.environ.get("ORCHESTRATOR_DEVELOPER_MODEL") or "CLI default"
         model_rev = os.environ.get("ORCHESTRATOR_REVIEWER_MODEL") or "CLI default"
         rows.append(("Models", "PASS", f"developer={model_dev}; reviewer={model_rev}"))
-    else:
+    elif valid_backend and workspace_config_ok:
         rows.append(("Models", "PASS", "selected in OpenCode role configuration files"))
+    else:
+        rows.append(("Models", "WARN", "not checked (backend or workspace config invalid)"))
+
+    image_exists = None
     if config.IMAGE:
-        try:
-            image_exists = _docker_image_exists(config.IMAGE)
-        except RuntimeError as exc:
-            image_exists = None
-            image_problem = str(exc)
+        if not valid_backend or not workspace_config_ok:
+            rows.append(("Image", "WARN", "not checked (backend or workspace config invalid)"))
         else:
-            image_problem = ""
-        if image_exists is True:
-            rows.append(("Image", "PASS", config.IMAGE))
-            executable = "codex" if backend == "codex" else "opencode"
-            installed = _docker_version(config.IMAGE, executable)
-            expected = toolchain.load()["tools"][backend]["version"]
-            actual_version = _normalized_cli_version(backend, installed)
-            if actual_version is None:
-                version_status = "WARN"
-                version_detail = f"installed version unavailable; pinned={expected}"
-            else:
-                version_status = "PASS" if actual_version == expected else "WARN"
-                version_detail = f"installed={actual_version}; pinned={expected}"
-            rows.append(("Agent CLI", version_status, version_detail))
-        elif image_exists is False:
-            rows.append(("Image", "WARN", f"not built: {config.IMAGE}"))
-        else:
-            rows.append(("Image", "FAIL", image_problem))
-    if backend == "codex":
+            try:
+                image_exists = _docker_image_exists(config.IMAGE)
+            except (RuntimeError, OSError) as exc:
+                rows.append(("Image", "FAIL", str(exc)))
+            if image_exists is True:
+                rows.append(("Image", "PASS", config.IMAGE))
+                executable = "codex" if backend == "codex" else "opencode"
+                try:
+                    installed = _docker_version(config.IMAGE, executable)
+                except (RuntimeError, OSError) as exc:
+                    installed = None
+                    version_detail = f"installed version unavailable ({exc})"
+                else:
+                    version_detail = ""
+                try:
+                    expected = toolchain.load()["tools"][backend]["version"]
+                except (RuntimeError, OSError, KeyError, TypeError) as exc:
+                    rows.append(("Agent CLI", "WARN", f"pinned version unavailable ({exc})"))
+                else:
+                    actual_version = _normalized_cli_version(backend, installed)
+                    if actual_version is None:
+                        version_status = "WARN"
+                        detail = version_detail or "installed version unavailable"
+                        version_detail = f"{detail}; pinned={expected}"
+                    else:
+                        version_status = "PASS" if actual_version == expected else "WARN"
+                        version_detail = f"installed={actual_version}; pinned={expected}"
+                    rows.append(("Agent CLI", version_status, version_detail))
+            elif image_exists is False:
+                rows.append(("Image", "WARN", f"not built: {config.IMAGE}"))
+    elif valid_backend and workspace_config_ok:
+        rows.append(("Image", "FAIL", "ORCHESTRATOR_DOCKER_IMAGE is not configured"))
+
+    if valid_backend and backend == "codex":
         state = os.environ.get("ORCHESTRATOR_CODEX_STATE_DIR", "")
-        state_exists = bool(state) and Path(state).is_dir()
+        state_exists = bool(state) and Path(state).is_absolute() and Path(state).is_dir()
         rows.append(("Codex state", "PASS" if state_exists else "FAIL", state or "not configured"))
-        try:
-            can_check_auth = bool(state_exists and config.IMAGE and _docker_image_exists(config.IMAGE))
-        except RuntimeError:
-            can_check_auth = False
-        if can_check_auth:
-            auth_state, _ = _probe_auth_status()
+        if workspace_config_ok and state_exists and image_exists is True:
+            try:
+                auth_state, _ = _probe_auth_status()
+            except (RuntimeError, OSError, TypeError, ValueError):
+                auth_state = "unknown"
             auth_status = "PASS" if auth_state == "authenticated" else "WARN"
             rows.append(("Codex auth", auth_status, auth_state))
         else:
-            rows.append(("Codex auth", "WARN", "not checked (state or image unavailable)"))
+            rows.append(("Codex auth", "WARN", "not checked (workspace config, state, or image unavailable)"))
     for label, status, detail in rows:
         print(f"{status:4} {label}: {detail}")
     return 1 if any(status == "FAIL" for _, status, _ in rows) else 0
@@ -369,12 +390,18 @@ def main(argv=None) -> int:
         selected = tuple(args.components or ("codex", "opencode", "pytest"))
         if "all" in selected:
             selected = ("codex", "opencode", "pytest")
+        candidate_pins_written = False
+        validation_started = False
+        toolchain_before = None
         try:
+            toolchain_before = toolchain.LOCK_FILE.read_bytes()
             outcomes = toolchain.update(selected=selected)
+            candidate_pins_written = any(state == "UPDATE AVAILABLE" for _, _, _, state in outcomes)
             updated_toolchain = toolchain.load()
             for name, pinned, candidate, state in outcomes:
                 print(f"{name}: {state} (pinned {pinned}; registry latest {candidate})")
             print("Toolchain update evaluation complete; equal or ahead pins were preserved.", flush=True)
+            validation_started = True
             subprocess.run([sys.executable, "-m", "unittest", "discover", "-v"], cwd=ROOT, check=True)
             for backend in ("codex", "opencode"):
                 selected_image = image.default_image_name(backend, updated_toolchain)
@@ -383,7 +410,25 @@ def main(argv=None) -> int:
             print("Unit and image smoke checks passed. Review the toolchain.json diff.")
             return 0
         except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
-            print(f"Toolchain update validation failed: {exc}. Review the toolchain.json diff; exact pins were preserved.", file=sys.stderr)
+            lock_changed = candidate_pins_written
+            lock_state_unknown = False
+            if toolchain_before is not None:
+                try:
+                    lock_changed = toolchain.LOCK_FILE.read_bytes() != toolchain_before
+                except OSError:
+                    lock_state_unknown = True
+            if lock_changed:
+                if validation_started:
+                    detail = "Candidate pins remain in toolchain.json; validation failed. Review the lock and diagnostics."
+                else:
+                    detail = "Candidate pins remain in toolchain.json; validation did not start. Review the lock and diagnostics."
+            elif lock_state_unknown:
+                detail = "toolchain.json could not be checked after failure; inspect the lock before proceeding."
+            elif validation_started:
+                detail = "Validation failed; no higher candidate pins were written and toolchain.json was not changed."
+            else:
+                detail = "Toolchain update failed before validation; no candidate pins were written to toolchain.json."
+            print(f"Toolchain update failed: {exc}. {detail}", file=sys.stderr)
             return 1
     return 2
 

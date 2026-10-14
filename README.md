@@ -78,11 +78,16 @@ setting is absent, the predictable default tag is
 environment file as `run.sh`. Set `ORCHESTRATOR_DOCKER_IMAGE` to the matching tag
 when changing backends. The Docker base tags and exact CLI/pytest pins are
 centralized in `toolchain.json`; normal builds always use those pins.
-`./agent toolchain check` queries registries for newer stable releases, and
-`./agent toolchain update [codex|opencode|pytest|all]` is the explicit update
-path. It writes exact stable versions, runs unit checks, then builds and smoke
-checks both backend images; validation failures leave the updated lock visible
-for review.
+`./agent toolchain check` is read-only and queries registries for their latest
+stable releases. `./agent toolchain update [codex|opencode|pytest|all]` is the
+explicit update command. Registry latest/dist-tags remain authoritative: a
+higher candidate is an update, an equal one is current, and a lower one is
+reported as `PIN AHEAD` (the pin is newer than the registry tag) and never
+applied as a downgrade. Higher exact stable pins are written before unit and
+image smoke validation. If validation fails, those candidate pins remain visible
+in `toolchain.json` for review, and the command reports validation did not
+complete. Prerelease pins are rejected; SemVer build metadata is allowed and
+ignored when comparing precedence.
 The image build passes the local host UID/GID as build arguments and creates a
 matching non-root `agent` account, so host-owned writable mounts work without
 changing their ownership or mode.
@@ -134,6 +139,9 @@ persistent state as sensitive. `auth status` is non-destructive; login/logout
 run inside the repository-owned image. OpenCode reports Codex auth as not
 applicable. Bootstrap, `check`, `doctor`, image checks, and toolchain inspection
 do not run inference. Bootstrap does not authenticate.
+Doctor reports task readiness separately, so it can pass workspace
+infrastructure before a task is authored. `./agent check` and normal workflow
+execution still require a non-template task.
 
 When `ORCHESTRATOR_ENV_FILE` is unset, `agent` discovers the sibling workspace
 config only when the checkout has the bootstrap workspace layout. An explicit

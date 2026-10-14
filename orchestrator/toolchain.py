@@ -13,9 +13,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_FILE = ROOT / "toolchain.json"
+_NUMERIC = r"(?:0|[1-9]\d*)"
+_BUILD_IDENTIFIER = r"[0-9A-Za-z-]+"
+_PRERELEASE_IDENTIFIER = r"(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
+    rf"^({_NUMERIC})\.({_NUMERIC})\.({_NUMERIC})"
+    rf"(?:-({_PRERELEASE_IDENTIFIER}(?:\.{_PRERELEASE_IDENTIFIER})*))?"
+    rf"(?:\+({_BUILD_IDENTIFIER}(?:\.{_BUILD_IDENTIFIER})*))?$"
 )
 
 
@@ -40,7 +44,10 @@ def load(path: Path = LOCK_FILE) -> dict:
 
 
 def stable_version(value: str) -> bool:
-    return isinstance(value, str) and bool(SEMVER.fullmatch(value)) and "-" not in value
+    if not isinstance(value, str):
+        return False
+    match = SEMVER.fullmatch(value)
+    return bool(match) and match.group(4) is None
 
 
 def compare_stable_versions(left: str, right: str) -> int:

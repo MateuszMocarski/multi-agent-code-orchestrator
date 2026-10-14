@@ -1,6 +1,10 @@
+import json
 import os
+import io
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,12 +19,14 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn("pytest", toolchain.versions_report(data))
 
     def test_stable_semver_excludes_prereleases(self):
-        for value in ("1.2.3-alpha.1", "1.2.3-beta", "1.2.3-rc.1", "latest"):
+        for value in ("1.2.3-alpha.1", "1.2.3-beta", "1.2.3-rc.1", "1.2.3-rc.1+build", "latest"):
             self.assertFalse(toolchain.stable_version(value))
-        self.assertTrue(toolchain.stable_version("1.2.3"))
+        for value in ("1.2.3", "1.2.3+build.7", "1.2.3+build-7"):
+            self.assertTrue(toolchain.stable_version(value))
 
     def test_stable_semver_order_and_toolchain_states(self):
         self.assertEqual(toolchain.compare_stable_versions("1.19.0", "2.0.22"), -1)
+        self.assertEqual(toolchain.compare_stable_versions("1.2.3+build.7", "1.2.3+build-7"), 0)
         self.assertEqual(toolchain.update_state("2.0.22", "1.19.0"), "PIN AHEAD")
         self.assertEqual(toolchain.update_state("2.0.22", "2.0.22"), "CURRENT")
         self.assertEqual(toolchain.update_state("1.19.0", "2.0.22"), "UPDATE AVAILABLE")
@@ -38,7 +44,7 @@ class ToolchainTests(unittest.TestCase):
             data = toolchain.load()
             data["tools"]["opencode"]["version"] = "2.0.22"
             data["tools"]["codex"]["version"] = "1.0.0"
-            rendered = __import__("json").dumps(data, indent=2) + "\n"
+            rendered = json.dumps(data, indent=2) + "\n"
             path.write_text(rendered, encoding="utf-8")
             original = path.read_bytes()
             candidates = {"opencode-ai": "1.19.0", "@openai/codex": "1.1.0"}
@@ -48,7 +54,7 @@ class ToolchainTests(unittest.TestCase):
             self.assertEqual(updated["tools"]["opencode"]["version"], "2.0.22")
             self.assertEqual(updated["tools"]["codex"]["version"], "1.1.0")
             self.assertEqual([entry[3] for entry in outcomes], ["PIN AHEAD", "UPDATE AVAILABLE"])
-            self.assertEqual(__import__("json").loads(original)["tools"]["opencode"]["version"], "2.0.22")
+            self.assertEqual(json.loads(original)["tools"]["opencode"]["version"], "2.0.22")
 
     def test_all_lower_or_equal_candidates_do_not_rewrite_lock(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -101,6 +107,67 @@ class ToolchainTests(unittest.TestCase):
 
 
 class AgentCliTests(unittest.TestCase):
+    def test_doctor_invalid_backend_is_controlled_and_skips_backend_probes(self):
+        from orchestrator import config
+        output = []
+        with patch.object(config, "BACKEND", "not-a-backend"), patch.object(config, "IMAGE", "configured:image"), \
+             patch.object(cli, "_run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")), \
+             patch.object(cli, "_docker_image_exists") as image_check, \
+             patch.object(cli, "_probe_auth_status") as auth_probe, \
+             patch("builtins.print", side_effect=lambda *parts, **kwargs: output.append(" ".join(map(str, parts)))):
+            self.assertEqual(cli.doctor(), 1)
+        self.assertTrue(any("FAIL Backend: not-a-backend" in line for line in output))
+        self.assertTrue(any("FAIL Workspace config:" in line for line in output))
+        image_check.assert_not_called()
+        auth_probe.assert_not_called()
+
+    def test_doctor_invalid_repository_path_is_controlled_and_skips_auth(self):
+        from orchestrator import config
+        with tempfile.TemporaryDirectory() as temp:
+            output = []
+            missing_repo = Path(temp) / "repo-missing"
+            with patch.object(config, "BACKEND", "codex"), patch.object(config, "IMAGE", "configured:image"), \
+                 patch.object(config, "REPO", missing_repo), \
+                 patch.object(cli, "_run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")), \
+                 patch.object(cli, "_docker_image_exists") as image_check, \
+                 patch.object(cli, "_probe_auth_status") as auth_probe, \
+                 patch("builtins.print", side_effect=lambda *parts, **kwargs: output.append(" ".join(map(str, parts)))):
+                self.assertEqual(cli.doctor(), 1)
+            self.assertTrue(any("FAIL Workspace config:" in line for line in output))
+            image_check.assert_not_called()
+            auth_probe.assert_not_called()
+
+    def test_update_validation_failure_says_candidate_lock_remains(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / "toolchain.json"
+            candidate_data = toolchain.load()
+            candidate_data["tools"]["codex"]["version"] = "0.162.1"
+            lock.write_text(json.dumps(toolchain.load(), indent=2) + "\n", encoding="utf-8")
+            outcomes = [("codex", "0.156.1", "0.162.1", "UPDATE AVAILABLE")]
+
+            def write_candidate(*, selected):
+                lock.write_text(json.dumps(candidate_data, indent=2) + "\n", encoding="utf-8")
+                return outcomes
+
+            output = io.StringIO()
+            with patch.object(toolchain, "LOCK_FILE", lock), \
+                 patch.object(toolchain, "update", side_effect=write_candidate), \
+                 patch.object(toolchain, "load", return_value=candidate_data), \
+                 patch.object(cli.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["unittest"])), \
+                 redirect_stderr(output):
+                self.assertEqual(cli.main(["toolchain", "update", "codex"]), 1)
+            message = output.getvalue()
+            self.assertIn("Candidate pins remain in toolchain.json", message)
+            self.assertIn("validation failed", message)
+            self.assertNotIn("pins were preserved", message)
+            self.assertEqual(json.loads(lock.read_text())["tools"]["codex"]["version"], "0.162.1")
+
+    def test_registry_failure_says_no_candidate_pins_were_written(self):
+        output = io.StringIO()
+        with patch.object(toolchain, "update", side_effect=RuntimeError("offline")), redirect_stderr(output):
+            self.assertEqual(cli.main(["toolchain", "update", "codex"]), 1)
+        self.assertIn("failed before validation; no candidate pins were written", output.getvalue())
+
     def test_explicit_config_precedes_workspace_discovery(self):
         with tempfile.TemporaryDirectory() as temp:
             explicit = Path(temp) / "explicit.env"
@@ -155,6 +222,17 @@ class AgentCliTests(unittest.TestCase):
              patch("builtins.print", side_effect=lambda *parts, **kwargs: output.append(" ".join(parts))):
             self.assertEqual(cli._auth_state_action("status"), 0)
         self.assertEqual(output, ["Codex authentication: authenticated (account details hidden)."])
+
+    def test_auth_status_reports_unknown_when_docker_cli_is_unavailable(self):
+        from orchestrator import config
+        with tempfile.TemporaryDirectory() as temp:
+            output = []
+            with patch.object(config, "BACKEND", "codex"), patch.object(config, "IMAGE", "agent:codex"), \
+                 patch.dict(os.environ, {"ORCHESTRATOR_CODEX_STATE_DIR": temp}), \
+                 patch.object(cli, "_codex_auth_help", side_effect=FileNotFoundError("docker")), \
+                 patch("builtins.print", side_effect=lambda *parts, **kwargs: output.append(" ".join(parts))):
+                self.assertEqual(cli._auth_state_action("status"), 1)
+            self.assertEqual(output, ["Codex authentication: UNKNOWN (status could not be determined)."])
 
     def test_logout_success_ignores_negative_status_language(self):
         from orchestrator import config
