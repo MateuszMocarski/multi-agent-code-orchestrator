@@ -24,4 +24,4 @@ if [[ -n "${ORCHESTRATOR_ENV_FILE+x}" ]]; then
   set +a
 fi
 
-exec python3 image.py "$@"
+exec python3 -m orchestrator.image "$@"

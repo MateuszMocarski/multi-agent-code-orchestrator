@@ -3,9 +3,14 @@
 This project runs a deterministic developer, quality-gate, and reviewer loop against
 a target Git repository. The Python orchestrator owns role permissions, task and
 prompt selection, quality gates, verdict parsing, and the bounded correction loop.
-`agent_runtime.py` owns runtime-specific commands, environment, configuration/state
+`orchestrator/agent_runtime.py` owns runtime-specific commands, environment, configuration/state
 mounts, networking, and backend validation. `docker/Dockerfile.agent` and
 `image.sh` own the shared agent image definition and its build and smoke-check steps.
+
+The Python implementation lives in the `orchestrator/` package. The repository
+root keeps the shell launchers, Docker assets, prompts, task template, and tests;
+the launchers change to the repository root before invoking the package, so they
+work from any current directory.
 
 ## Workflow
 
@@ -51,8 +56,8 @@ ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
 ```
 
 `ORCHESTRATOR_ENV_FILE`, when set, selects the environment file. Otherwise `run.sh`
-loads `.env` in this checkout. Future bootstrap-generated configuration should live
-outside the orchestrator source checkout, for example at
+loads `.env` in this checkout. Bootstrap-generated configuration lives outside
+the orchestrator source checkout, for example at
 `<workspace>/config/orchestrator.env`. The launcher loads the selected file before
 starting Python.
 
@@ -138,13 +143,27 @@ Without `--python-requirements`, the image contains the baseline Python 3.14 and
 pytest setup only. Other dependency formats or system libraries require a
 deliberate image extension.
 
-After bootstrap, create/edit `<workspace>/projects/<target>/runtime/input/task.md`
-and run this safe preflight from the cloned orchestrator:
+Rerunning the same command verifies repository identity and revision, preserves
+runtime and state contents, and reuses equivalent configuration. A different
+configuration requires `--force-config`. The image is rebuilt on each normal
+run so Dockerfile and host UID/GID changes are applied; use `--skip-image-build`
+to check an existing image instead. The generated config and config directory
+are restricted to the current user; the default Codex state directory and its
+parent are mode `0700`. Supplied external Codex state is referenced without
+changing its permissions.
+
+Bootstrap's `run.sh --check` is a safe configuration preflight, not an agent
+workflow. After bootstrap, create/edit
+`<workspace>/projects/<target>/runtime/input/task.md` and run the preflight from
+the cloned orchestrator:
 
 ```sh
 cd /absolute/path/agent-workspace/orchestrator
 ORCHESTRATOR_ENV_FILE=/absolute/path/agent-workspace/config/orchestrator.env ./run.sh --check
 ```
+
+Only after reviewing the edited task and configuration, start the actual agent
+workflow explicitly with `./run.sh` from that same orchestrator directory.
 
 ## OpenCode setup
 

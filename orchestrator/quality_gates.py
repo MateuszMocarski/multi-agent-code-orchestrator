@@ -1,10 +1,10 @@
-from config import (
+from .config import (
     DOCKER_COMMAND,
     IMAGE,
     QUALITY_GATE_ENVIRONMENT,
     REPO,
 )
-from docker_runner import run_container
+from .docker_runner import run_container
 
 
 def run_quality_gate(name: str, container_command: list[str]) -> int:

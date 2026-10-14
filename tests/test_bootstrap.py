@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import bootstrap
+from orchestrator import bootstrap
 
 
 class BootstrapTests(unittest.TestCase):
@@ -95,6 +95,9 @@ class BootstrapTests(unittest.TestCase):
         path = self.root / "config.env"
         bootstrap.write_config(path, "A=1\n", False)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        path.chmod(0o644)
+        bootstrap.write_config(path, "A=1\n", False)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         with self.assertRaisesRegex(RuntimeError, "differs"):
             bootstrap.write_config(path, "A=2\n", False)
         bootstrap.write_config(path, "A=2\n", True)
@@ -114,6 +117,94 @@ class BootstrapTests(unittest.TestCase):
         inside.mkdir(parents=True)
         with self.assertRaisesRegex(ValueError, "outside"):
             bootstrap.validate_codex_state(inside, self.layout)
+
+    def test_default_codex_state_directory_is_private(self):
+        state = self.root / "state" / "codex"
+        bootstrap.ensure_private_directory(state.parent)
+        bootstrap.ensure_private_directory(state)
+        self.assertEqual(state.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+
+    def test_existing_repository_identity_accepts_normalized_local_source(self):
+        source, _, _ = self.make_git_repo("identity-source")
+        destination = self.root / "identity-destination"
+        subprocess.run(["git", "clone", "-q", str(source), str(destination)], check=True)
+        bootstrap.verify_repository_identity(destination, {str(source) + "/"}, "Target")
+
+    def test_unrelated_existing_repository_is_rejected_without_mutation(self):
+        source, _, _ = self.make_git_repo("expected-source")
+        destination_source, _, _ = self.make_git_repo("unrelated-source")
+        destination = self.root / "unrelated-destination"
+        subprocess.run(["git", "clone", "-q", str(destination_source), str(destination)], check=True)
+        marker = destination / "user-data"
+        marker.write_text("keep\n", encoding="utf-8")
+        head = bootstrap.repository_head(destination)
+        with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+            bootstrap.verify_repository_identity(destination, {str(source)}, "Target")
+        self.assertEqual(bootstrap.repository_head(destination), head)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep\n")
+
+    def test_remote_style_local_source_ref_resolution_and_ambiguity(self):
+        source, _, commit = self.make_git_repo("ref-source")
+        subprocess.run(["git", "-C", str(source), "branch", "release"], check=True)
+        bare = self.root / "remote.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(source), str(bare)], check=True)
+        remote_url = bare.as_uri()
+        self.assertEqual(
+            bootstrap.expected_source_commit(remote_url, "release"),
+            commit,
+        )
+        subprocess.run(["git", "-C", str(bare), "tag", "release", commit], check=True)
+        with self.assertRaisesRegex(RuntimeError, "ambiguous"):
+            bootstrap.expected_source_commit(remote_url, "release")
+        self.assertEqual(
+            bootstrap.expected_source_commit(remote_url, "refs/heads/release"),
+            commit,
+        )
+
+    def test_run_stream_mode_preserves_failure_diagnostic(self):
+        error = subprocess.CalledProcessError(7, ["slow-command"], stderr=None, output=None)
+        with mock.patch.object(bootstrap.subprocess, "run", side_effect=error) as mocked:
+            with self.assertRaisesRegex(RuntimeError, "exit code 7"):
+                bootstrap.run(["slow-command"], capture=False)
+        self.assertIsNone(mocked.call_args.kwargs["stdout"])
+        self.assertIsNone(mocked.call_args.kwargs["stderr"])
+
+    def test_repeated_bootstrap_preserves_runtime_state_and_private_config(self):
+        source, _, _ = self.make_git_repo("rerun-target")
+        workspace = self.root / "workspace with spaces"
+        args = bootstrap.make_parser().parse_args([
+            "--workspace", str(workspace), "--target-repo", str(source),
+            "--backend", "codex", "--skip-image-build",
+        ])
+        original_run = bootstrap.run
+        seen_image_actions = []
+
+        def run_with_mocked_images(command, **kwargs):
+            if len(command) >= 2 and Path(command[0]).name == "image.sh":
+                seen_image_actions.append(command[1])
+                return ""
+            return original_run(command, **kwargs)
+
+        with mock.patch.object(bootstrap, "check_prerequisites"), mock.patch.object(
+            bootstrap, "run", side_effect=run_with_mocked_images
+        ):
+            bootstrap.bootstrap(args)
+            config = workspace / "config" / "orchestrator.env"
+            runtime_marker = workspace / "projects" / source.name / "runtime" / "output" / "keep"
+            state_marker = workspace / "state" / "codex" / "keep"
+            runtime_marker.write_text("runtime\n", encoding="utf-8")
+            state_marker.write_text("state\n", encoding="utf-8")
+            config_content = config.read_text(encoding="utf-8")
+            config.chmod(0o644)
+            bootstrap.bootstrap(args)
+
+        self.assertEqual(config.read_text(encoding="utf-8"), config_content)
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(config.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(runtime_marker.read_text(encoding="utf-8"), "runtime\n")
+        self.assertEqual(state_marker.read_text(encoding="utf-8"), "state\n")
+        self.assertEqual(seen_image_actions, ["check", "mount-check"] * 2)
 
     def test_missing_prerequisites_are_actionable(self):
         with mock.patch.object(bootstrap.platform, "system", return_value="Windows"):

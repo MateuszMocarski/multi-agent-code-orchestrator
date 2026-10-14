@@ -1,6 +1,6 @@
-from config import REVIEW_DIR, REVIEW_FILE
-from container_command import build_agent_command
-from docker_runner import run_container
+from .config import REVIEW_DIR, REVIEW_FILE
+from .container_command import build_agent_command
+from .docker_runner import run_container
 
 
 def run_reviewer(prompt: str) -> int:

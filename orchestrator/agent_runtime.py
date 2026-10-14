@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import BACKEND, PROJECT_DIR, REPO
+from .config import BACKEND, PROJECT_DIR, REPO
 
 
 @dataclass(frozen=True)

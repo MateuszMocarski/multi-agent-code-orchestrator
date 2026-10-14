@@ -1,6 +1,6 @@
 import sys
 
-from config import (
+from .config import (
     DEVELOPER_FIX_PROMPT,
     DEVELOPER_PROMPT,
     MAX_REVIEW_ROUNDS,
@@ -9,16 +9,16 @@ from config import (
     run_preflight,
     validate_runtime_configuration,
 )
-from developer import run_developer
-from quality_gates import run_git_diff_check, run_pytest
-from reviewer import read_verdict, run_reviewer
+from .developer import run_developer
+from .quality_gates import run_git_diff_check, run_pytest
+from .reviewer import read_verdict, run_reviewer
 
 
 def main() -> int:
     if sys.argv[1:] == ["--check"]:
         return run_preflight()
     if sys.argv[1:]:
-        print("Usage: python3 main.py [--check]")
+        print("Usage: python3 -m orchestrator.main [--check]")
         return 2
 
     try:

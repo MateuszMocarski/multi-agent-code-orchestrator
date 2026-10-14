@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
 def environment_path(name: str) -> Path | None:
@@ -78,11 +78,11 @@ def validate_runtime_configuration() -> None:
         )
 
     if BACKEND == "opencode":
-        from agent_runtime import validate_opencode_configuration
+        from .agent_runtime import validate_opencode_configuration
 
         validate_opencode_configuration()
     elif BACKEND == "codex":
-        from agent_runtime import validate_codex_configuration
+        from .agent_runtime import validate_codex_configuration
 
         validate_codex_configuration()
 

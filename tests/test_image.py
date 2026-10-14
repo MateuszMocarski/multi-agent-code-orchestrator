@@ -5,10 +5,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import image
+from orchestrator import config, image
 
 
 class ImageCommandTests(unittest.TestCase):
+    def test_package_resources_resolve_from_repository_root(self):
+        self.assertEqual(image.ROOT, config.PROJECT_DIR)
+        self.assertTrue((image.ROOT / "docker" / "Dockerfile.agent").is_file())
+        self.assertTrue((config.PROMPTS_DIR / "developer.txt").is_file())
+        self.assertTrue((image.ROOT / "input" / "task.example.md").is_file())
+
     def test_default_tags_are_backend_specific_and_predictable(self):
         self.assertEqual(
             image.default_image_name("codex"), "orchestrator-agent:codex-py314-v1"
@@ -84,13 +90,12 @@ class ImageCommandTests(unittest.TestCase):
         environment = os.environ.copy()
         environment.pop("ORCHESTRATOR_ENV_FILE", None)
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            script = temp_root / "image.sh"
-            shutil.copyfile(image.ROOT / "image.sh", script)
-            shutil.copyfile(image.ROOT / "image.py", temp_root / "image.py")
-            script.chmod(0o755)
+            checkout = Path(temp_dir)
+            shutil.copyfile(image.ROOT / "image.sh", checkout / "image.sh")
+            (checkout / "image.sh").chmod(0o755)
+            shutil.copytree(image.ROOT / "orchestrator", checkout / "orchestrator")
             result = subprocess.run(
-                [str(script), "--help"],
+                [str(checkout / "image.sh"), "--help"],
                 env=environment,
                 capture_output=True,
                 text=True,
