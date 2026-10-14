@@ -1,7 +1,7 @@
 """Construct agent containers while keeping role mounts backend-independent."""
 
-from agent_runtime import runtime_spec
-from config import (
+from .agent_runtime import runtime_spec
+from .config import (
     COMMON_AGENT_ENVIRONMENT,
     DOCKER_COMMAND,
     IMAGE,

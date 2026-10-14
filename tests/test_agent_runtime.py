@@ -6,8 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import config
-import quality_gates
+from orchestrator import config, quality_gates
 
 
 class AgentRuntimeTests(unittest.TestCase):
@@ -38,19 +37,18 @@ class AgentRuntimeTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self.original_env)
         importlib.reload(config)
-        if "agent_runtime" in sys.modules:
-            importlib.reload(sys.modules["agent_runtime"])
-        if "container_command" in sys.modules:
-            importlib.reload(sys.modules["container_command"])
+        for module_name in ("orchestrator.agent_runtime", "orchestrator.container_command"):
+            if module_name in sys.modules:
+                importlib.reload(sys.modules[module_name])
         self.temp.cleanup()
 
     def load_config(self, **extra):
         os.environ.clear()
         os.environ.update({**self.base_env, **extra})
         reloaded = importlib.reload(config)
-        runtime = importlib.import_module("agent_runtime")
+        runtime = importlib.import_module("orchestrator.agent_runtime")
         importlib.reload(runtime)
-        builder = importlib.import_module("container_command")
+        builder = importlib.import_module("orchestrator.container_command")
         importlib.reload(builder)
         return reloaded, runtime, builder
 

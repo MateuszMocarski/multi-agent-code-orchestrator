@@ -1,6 +1,8 @@
 """Build and validate the shared agent image without running an agent task."""
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -8,12 +10,21 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import toolchain
 
-ROOT = Path(__file__).resolve().parent
+
+ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "docker" / "Dockerfile.agent"
 BACKENDS = {"codex", "opencode"}
-IMAGE_VERSION = "v1"
-CODEX_CLI_VERSION = "0.156.1"
+
+
+def current_toolchain() -> dict:
+    """Read the lock at operation time rather than caching mutable pins."""
+    return toolchain.load(toolchain.LOCK_FILE)
+
+
+def toolchain_identity(data: dict) -> str:
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
 def host_identity() -> tuple[int, int]:
@@ -32,9 +43,11 @@ def validate_backend(backend: str) -> str:
     return backend
 
 
-def default_image_name(backend: str) -> str:
+def default_image_name(backend: str, toolchain_data: dict | None = None) -> str:
     validate_backend(backend)
-    return f"orchestrator-agent:{backend}-py314-{IMAGE_VERSION}"
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
+    python_tag = data["image"]["python_version"].replace(".", "")
+    return f"orchestrator-agent:{backend}-py{python_tag}-{data['image']['tag_version']}"
 
 
 def build_command(
@@ -42,8 +55,11 @@ def build_command(
     image: str,
     context: Path,
     requirements: Path | None = None,
+    toolchain_data: dict | None = None,
 ) -> list[str]:
     validate_backend(backend)
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
+    identity = toolchain_identity(data)
     uid, gid = host_identity()
     command = [
         "docker",
@@ -56,6 +72,28 @@ def build_command(
         f"AGENT_UID={uid}",
         "--build-arg",
         f"AGENT_GID={gid}",
+        "--build-arg",
+        f"CODEX_PACKAGE={data['tools']['codex']['package']}",
+        "--build-arg",
+        f"CODEX_VERSION={data['tools']['codex']['version']}",
+        "--build-arg",
+        f"OPENCODE_PACKAGE={data['tools']['opencode']['package']}",
+        "--build-arg",
+        f"OPENCODE_VERSION={data['tools']['opencode']['version']}",
+        "--build-arg",
+        f"PYTEST_VERSION={data['tools']['pytest']['version']}",
+        "--build-arg",
+        f"NODE_BASE={data['image']['node_base']}",
+        "--build-arg",
+        f"PYTHON_BASE={data['image']['python_base']}",
+        "--build-arg",
+        f"PYTHON_VERSION={data['image']['python_version']}",
+        "--build-arg",
+        f"AGENT_BACKEND_VERSION={data['tools'][backend]['version']}",
+        "--build-arg",
+        f"AGENT_BACKEND_PACKAGE={data['tools'][backend]['package']}",
+        "--build-arg",
+        f"TOOLCHAIN_ID={identity}",
         "--tag",
         image,
     ]
@@ -75,7 +113,33 @@ def _run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
-def build_image(backend: str, image: str, requirements: str | None) -> None:
+def _inspect_image_metadata(backend: str, image: str, toolchain_data: dict | None = None) -> None:
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
+    identity = toolchain_identity(data)
+    template = "|".join((
+        '{{index .Config.Labels "org.opencontainers.image.backend"}}',
+        '{{index .Config.Labels "org.opencontainers.image.backend-package"}}',
+        '{{index .Config.Labels "org.opencontainers.image.backend-version"}}',
+        '{{index .Config.Labels "org.opencontainers.image.toolchain-id"}}',
+    ))
+    try:
+        result = subprocess.run(["docker", "image", "inspect", image, "--format", template],
+                                check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        diagnostic = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"Cannot inspect image {image}: {diagnostic}") from exc
+    fields = result.stdout.strip().split("|")
+    if len(fields) == 4 and all(value in ("", "<no value>") for value in fields):
+        print(f"Image metadata unavailable for legacy image: {image}")
+        return
+    expected = [backend, data["tools"][backend]["package"],
+                data["tools"][backend]["version"], identity]
+    if fields != expected:
+        raise RuntimeError(f"Image metadata mismatch for {image}: expected backend/toolchain labels {expected[:3]}")
+
+
+def build_image(backend: str, image: str, requirements: str | None, toolchain_data: dict | None = None) -> None:
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
     validate_backend(backend)
     if not _docker_available():
         raise RuntimeError("Docker CLI not found; install Docker before building images.")
@@ -94,22 +158,25 @@ def build_image(backend: str, image: str, requirements: str | None) -> None:
     with tempfile.TemporaryDirectory(prefix="orchestrator-agent-image-") as temp_dir:
         context = Path(temp_dir)
         shutil.copyfile(DOCKERFILE, context / "Dockerfile.agent")
-        _run(build_command(backend, image, context, requirements_path))
+        _run(build_command(backend, image, context, requirements_path, data))
     print(f"Built agent image: {image}")
 
 
-def _smoke_command(backend: str) -> str:
+def _smoke_command(backend: str, toolchain_data: dict | None = None) -> str:
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
     uid, gid = host_identity()
+    python_version = tuple(int(part) for part in data["image"]["python_version"].split("."))
+    pytest_version = data["tools"]["pytest"]["version"]
     common = (
         f"test \"$(id -u)\" = {uid}; test \"$(id -g)\" = {gid}; "
         "git --version; python --version; "
-        "python -c 'import sys; assert sys.version_info[:2] == (3, 14)' "
-        "; pytest --version"
+        f"python -c 'import sys; assert sys.version_info[:2] == {python_version}' "
+        f"; test \"$(pytest --version)\" = 'pytest {pytest_version}'"
     )
     if backend == "codex":
         return (
             common
-            + f"; test \"$(codex --version)\" = 'codex-cli {CODEX_CLI_VERSION}'"
+            + f"; test \"$(codex --version)\" = 'codex-cli {data['tools']['codex']['version']}'"
             + "; codex --ask-for-approval never exec --sandbox workspace-write "
             "--cd /workspace --help >/dev/null"
             + "; codex --ask-for-approval never exec --sandbox workspace-write "
@@ -125,11 +192,12 @@ def _smoke_command(backend: str) -> str:
     raise ValueError("ORCHESTRATOR_AGENT_BACKEND must be one of: opencode, codex")
 
 
-def check_image(backend: str, image: str) -> None:
+def check_image(backend: str, image: str, toolchain_data: dict | None = None) -> None:
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
     validate_backend(backend)
     if not _docker_available():
         raise RuntimeError("Docker CLI not found; cannot inspect or smoke-check images.")
-    _run(["docker", "image", "inspect", image])
+    _inspect_image_metadata(backend, image, data)
     _run(
         [
             "docker",
@@ -141,7 +209,7 @@ def check_image(backend: str, image: str) -> None:
             "/bin/sh",
             image,
             "-ec",
-            _smoke_command(backend),
+            _smoke_command(backend, data),
         ]
     )
     print(f"Image smoke check passed: {image} ({backend})")
@@ -163,11 +231,12 @@ def _mount_run(image: str, mounts: list[str], script: str) -> None:
     )
 
 
-def check_mounts(backend: str, image: str) -> None:
+def check_mounts(backend: str, image: str, toolchain_data: dict | None = None) -> None:
+    data = toolchain_data if toolchain_data is not None else current_toolchain()
     validate_backend(backend)
     if not _docker_available():
         raise RuntimeError("Docker CLI not found; cannot run mount smoke checks.")
-    _run(["docker", "image", "inspect", image])
+    _inspect_image_metadata(backend, image, data)
     uid, gid = host_identity()
     with tempfile.TemporaryDirectory(prefix="orchestrator-mount-smoke-") as temp_dir:
         root = Path(temp_dir)

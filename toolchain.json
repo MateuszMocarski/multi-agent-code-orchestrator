@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "image": {
+    "tag_version": "v1",
+    "python_base": "python:3.14-slim-bookworm",
+    "python_version": "3.14",
+    "node_base": "node:24-bookworm-slim"
+  },
+  "tools": {
+    "codex": {
+      "package": "@openai/codex",
+      "version": "0.156.1",
+      "registry": "https://registry.npmjs.org"
+    },
+    "opencode": {
+      "package": "opencode-ai",
+      "version": "2.0.22",
+      "registry": "https://registry.npmjs.org"
+    },
+    "pytest": {
+      "package": "pytest",
+      "version": "8.4.2",
+      "registry": "https://pypi.org/pypi"
+    }
+  }
+}

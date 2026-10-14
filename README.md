@@ -3,9 +3,14 @@
 This project runs a deterministic developer, quality-gate, and reviewer loop against
 a target Git repository. The Python orchestrator owns role permissions, task and
 prompt selection, quality gates, verdict parsing, and the bounded correction loop.
-`agent_runtime.py` owns runtime-specific commands, environment, configuration/state
+`orchestrator/agent_runtime.py` owns runtime-specific commands, environment, configuration/state
 mounts, networking, and backend validation. `docker/Dockerfile.agent` and
 `image.sh` own the shared agent image definition and its build and smoke-check steps.
+
+The Python implementation lives in the `orchestrator/` package. The repository
+root keeps the shell launchers, Docker assets, prompts, task template, and tests;
+the launchers change to the repository root before invoking the package, so they
+work from any current directory.
 
 ## Workflow
 
@@ -28,8 +33,8 @@ containers. `docker/Dockerfile.agent` installs only that selected agent CLI.
 
 ### Image baseline and target dependencies
 
-The image provides Debian Bookworm userspace, bash, git, Python 3.14, and pytest
-8.4.2. This is the initial target baseline: Python/pytest projects. It does not
+The image provides Debian Bookworm userspace, bash, git, Python 3.14, and the
+pytest version pinned in `toolchain.json`. This is the initial target baseline: Python/pytest projects. It does not
 include arbitrary target-project dependencies by default. To include them, set
 `ORCHESTRATOR_PYTHON_REQUIREMENTS` to an absolute path to a pinned requirements
 file before building. The build passes it to BuildKit as a temporary build secret,
@@ -51,8 +56,8 @@ ORCHESTRATOR_ENV_FILE=/workspace/config/orchestrator.env ./run.sh
 ```
 
 `ORCHESTRATOR_ENV_FILE`, when set, selects the environment file. Otherwise `run.sh`
-loads `.env` in this checkout. Future bootstrap-generated configuration should live
-outside the orchestrator source checkout, for example at
+loads `.env` in this checkout. Bootstrap-generated configuration lives outside
+the orchestrator source checkout, for example at
 `<workspace>/config/orchestrator.env`. The launcher loads the selected file before
 starting Python.
 
@@ -71,8 +76,18 @@ setting is absent, the predictable default tag is
 `orchestrator-agent:<backend>-py314-v1` (for example,
 `orchestrator-agent:codex-py314-v1`). The selected backend comes from the same
 environment file as `run.sh`. Set `ORCHESTRATOR_DOCKER_IMAGE` to the matching tag
-when changing backends. The Docker base tags track Python 3.14 and Node 24 patch
-security updates; agent CLI versions and pytest are pinned in the Dockerfile.
+when changing backends. The Docker base tags and exact CLI/pytest pins are
+centralized in `toolchain.json`; normal builds always use those pins.
+`./agent toolchain check` is read-only and queries registries for their latest
+stable releases. `./agent toolchain update [codex|opencode|pytest|all]` is the
+explicit update command. Registry latest/dist-tags remain authoritative: a
+higher candidate is an update, an equal one is current, and a lower one is
+reported as `PIN AHEAD` (the pin is newer than the registry tag) and never
+applied as a downgrade. Higher exact stable pins are written before unit and
+image smoke validation. If validation fails, those candidate pins remain visible
+in `toolchain.json` for review, and the command reports validation did not
+complete. Prerelease pins are rejected; SemVer build metadata is allowed and
+ignored when comparing precedence.
 The image build passes the local host UID/GID as build arguments and creates a
 matching non-root `agent` account, so host-owned writable mounts work without
 changing their ownership or mode.
@@ -96,6 +111,104 @@ These commands do not authenticate or run an agent task. They are separate from
 
 The task must exist at `<runtime>/input/task.md` and differ from the tracked
 `input/task.example.md` template.
+
+## Top-level agent CLI
+
+`./agent` is the convenient interface; `bootstrap.sh`, `run.sh`, and `image.sh`
+remain supported compatibility launchers. Codex is the recommended backend;
+OpenCode remains supported as a local/experimental backend.
+
+```sh
+./agent --help
+./agent bootstrap --workspace /absolute/path/agent-workspace \
+  --target-repo /path/to/target.git --backend codex \
+  --developer-model developer-model-id --reviewer-model reviewer-model-id
+cd /absolute/path/agent-workspace/orchestrator
+./agent auth status
+./agent auth login
+./agent doctor
+# Edit /absolute/path/agent-workspace/projects/<target>/runtime/input/task.md
+./agent check   # safe preflight; never starts an agent
+./agent run     # starts developer/reviewer agents and uses inference
+```
+
+Per-role Codex model IDs are opaque and optional. Omit either option to use the
+Codex CLI/account default. The Codex auth lifecycle stores state only in the
+configured workspace state directory; it does not copy `~/.codex`. Treat this
+persistent state as sensitive. `auth status` is non-destructive; login/logout
+run inside the repository-owned image. OpenCode reports Codex auth as not
+applicable. Bootstrap, `check`, `doctor`, image checks, and toolchain inspection
+do not run inference. Bootstrap does not authenticate.
+Doctor reports task readiness separately, so it can pass workspace
+infrastructure before a task is authored. `./agent check` and normal workflow
+execution still require a non-template task.
+
+When `ORCHESTRATOR_ENV_FILE` is unset, `agent` discovers the sibling workspace
+config only when the checkout has the bootstrap workspace layout. An explicit
+environment file always takes precedence.
+
+## Reproducible workspace bootstrap
+
+`./agent bootstrap` prepares a separate workspace from a Git target source. It requires
+Linux/WSL, Python 3.10 or newer, Git, and Docker with daemon access as the current
+non-root user. Bootstrap does not install host software or create a host virtual
+environment; the orchestrator host code uses only the Python standard library.
+
+```sh
+./bootstrap.sh --workspace /absolute/path/agent-workspace \
+  --target-repo /path/to/target.git --backend codex
+```
+
+For OpenCode, pass existing role configuration files with `--developer-config`
+and `--reviewer-config`. Optional `--target-ref`, `--target-name`, `--image`,
+`--python-requirements`, `--codex-state`, and `--force-config` customize the
+workspace. Requirements paths may be absolute or relative to the cloned target.
+Bootstrap clones the current orchestrator commit by default and clones the target
+only when its destination is absent. Existing repositories are verified and left
+alone; generated configuration is preserved when equivalent and otherwise needs
+`--force-config` to replace.
+
+The workspace keeps source, runtime files, configuration, and Codex state apart:
+
+```text
+<workspace>/orchestrator/
+<workspace>/projects/<target>/repo/
+<workspace>/projects/<target>/runtime/{input,review,output,logs}/
+<workspace>/config/orchestrator.env
+<workspace>/state/codex/                 # Codex default only
+```
+
+Bootstrap writes an external, private `orchestrator.env`, builds the repository
+image, runs its non-inference `check` and mount checks, and performs `run.sh
+--check` against a temporary bootstrap-only task. `--skip-image-build` skips
+only the build and still checks the selected image. Codex authentication is not
+copied or tested; the configured state directory may still need authentication
+before real agent use.
+Without `--python-requirements`, the image contains the baseline Python 3.14 and
+pytest setup only. Other dependency formats or system libraries require a
+deliberate image extension.
+
+Rerunning the same command verifies repository identity and revision, preserves
+runtime and state contents, and reuses equivalent configuration. A different
+configuration requires `--force-config`. The image is rebuilt on each normal
+run so Dockerfile and host UID/GID changes are applied; use `--skip-image-build`
+to check an existing image instead. The generated config and config directory
+are restricted to the current user; the default Codex state directory and its
+parent are mode `0700`. Supplied external Codex state is referenced without
+changing its permissions.
+
+Bootstrap's `run.sh --check` is a safe configuration preflight, not an agent
+workflow. After bootstrap, create/edit
+`<workspace>/projects/<target>/runtime/input/task.md` and run the preflight from
+the cloned orchestrator:
+
+```sh
+cd /absolute/path/agent-workspace/orchestrator
+ORCHESTRATOR_ENV_FILE=/absolute/path/agent-workspace/config/orchestrator.env ./run.sh --check
+```
+
+Only after reviewing the edited task and configuration, start the actual agent
+workflow explicitly with `./run.sh` from that same orchestrator directory.
 
 ## OpenCode setup
 
@@ -164,11 +277,7 @@ limit without approval also requires human intervention.
 - Agent containers have no fixed names, so separate orchestrator runs do not collide
   on singleton container names.
 
-Codex CLI 0.156.1 matches the verified host CLI version. OpenCode uses the pinned
-`opencode-ai` package release 2.0.22; OpenCode is not installed on the host here,
-so that package pin could not be compared against a local executable. The base
-image tags intentionally receive upstream security patch updates. Authentication
-is not tested, and the automated tests do not run Codex inference. OpenCode still
-requires its two host config files even though Codex does not. The image build and
-validation lifecycle is now repository-owned;
-bootstrap automation that creates workspaces and configuration remains future work.
+The canonical OpenCode npm package used by this project is `opencode-ai`.
+OpenCode still requires its two host config files even though Codex does not.
+The image, bootstrap, and local CLI lifecycle are repository-owned. Automated
+tests use temporary Codex state and do not log in or run inference.

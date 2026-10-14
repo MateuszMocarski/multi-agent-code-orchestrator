@@ -28,7 +28,7 @@ if [[ "${1:-}" == "--check" ]]; then
     echo "Usage: ./run.sh [--check]"
     exit 2
   fi
-  exec python3 main.py --check
+  exec python3 -m orchestrator.main --check
 fi
 
 if [[ "$#" -ne 0 ]]; then
@@ -53,4 +53,4 @@ mkdir -p "$ORCHESTRATOR_RUNTIME_DIR/input" \
   "$ORCHESTRATOR_RUNTIME_DIR/output" \
   "$ORCHESTRATOR_RUNTIME_DIR/logs"
 
-exec python3 main.py
+exec python3 -m orchestrator.main
